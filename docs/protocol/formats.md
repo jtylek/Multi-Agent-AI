@@ -284,3 +284,23 @@ evaluated safely.
 Cleanup ownership (the sender deletes its message directory after all acks and resolution,
 or cancels after about three hours of inactivity) and bounded watches are behaviour, not
 format; they need their own tests.
+
+## 8. Per-subtask verification entries
+
+Plans may declare a verification command for a specific subtask with one entry per subtask:
+
+```text
+## Verification
+verify: T1: `python -m pytest tests/test_add.py -q`
+verify: T2: `python -m pytest tests/test_divide.py -q`
+```
+
+An entry may optionally be a Markdown list item (`- verify: ...`, `* verify: ...`, or
+`1. verify: ...`).
+
+The command is the inline-code span on the matching `verify: <subtask-id>:` line. The
+orchestrator passes the command to shell-free verification as an argv declaration; it must not
+interpret the line as a shell script. For backwards compatibility, a plan with one subtask and
+no matching `verify:` entry uses the last inline-code span in that subtask's verification text.
+When multiple subtasks share a verification section, each must use its own `verify:` entry;
+the legacy fallback is not used to infer commands for those subtasks.

@@ -160,6 +160,13 @@ for M1 so the orchestrator and worker worktrees share one state-root copy, with 
 it is not versioned or shared between clones, and `init` should print the path so newcomers can
 find it. A later milestone may add a versioned project-level profile with explicit precedence.
 
+## D17. Per-subtask verification syntax: Accepted (coordinator), 2026-10-20
+
+Verification sections may use one `verify: <subtask-id>: \`command\`` entry per subtask. The
+orchestrator selects the matching entry and converts the declared command to argv without a
+shell. Existing single-subtask plans retain the legacy last-inline-code fallback when no
+matching entry exists; multi-subtask plans must declare each command explicitly.
+
 ## Open
 
 - **O2. Registry.** Implemented in `src/multi_agent_ai/registry.py` with the `registry` CLI and

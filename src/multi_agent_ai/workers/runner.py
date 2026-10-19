@@ -36,7 +36,7 @@ from . import gitops, quota, versions
 from .base import MODES, Invocation, LaunchRequest, ProfileUnconfigured, ProviderAdapter, forbidden_in
 from .codex import CodexAdapter
 from .copilot import CopilotAdapter
-from .prompt import build_prompt, verification_command
+from .prompt import VerificationNotDeclared, build_prompt, verification_command
 
 ADAPTERS: dict[str, Callable[[], ProviderAdapter]] = {"codex": CodexAdapter, "copilot": CopilotAdapter}
 DEFAULT_LIVE_BRANCHES = ("main", "master")
@@ -280,6 +280,11 @@ def run_worker(
         detail = "; ".join(f"{item.agent}: {', '.join(item.shared)}" for item in conflicts)
         raise UsageError(f"reservation conflict: assignment for {req.subtask_id} overlaps active reservation ({detail})")
 
+    try:
+        verify = req.verify_command if req.verify_command is not None else verification_command(plan, subtask.id)
+    except VerificationNotDeclared as exc:
+        raise UsageError(str(exc)) from exc
+
     adapter = adapter or ADAPTERS[req.provider]()
     started = datetime.now()
     run = _Run(req, adapter, _new_attempt_id(started), started)
@@ -330,7 +335,6 @@ def run_worker(
     prompt_path = run.run_dir / "prompt.md"
     atomic_write(prompt_path, prompt)
     run.result["prompt_sha256"] = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-    verify = req.verify_command if req.verify_command is not None else verification_command(plan, subtask.id)
     session_id = str(uuid.uuid4())
     launch = LaunchRequest(req.worktree, req.mode, prompt, prompt_path, run.run_dir, req.model, session_id, verify)
     try:
@@ -486,6 +490,10 @@ def preview_worker(
     if conflicts := reservation_conflicts(req.state_root.path, subtask.files, agent=req.agent_id):
         detail = "; ".join(f"{item.agent}: {', '.join(item.shared)}" for item in conflicts)
         raise UsageError(f"reservation conflict: assignment for {req.subtask_id} overlaps active reservation ({detail})")
+    try:
+        verify = req.verify_command if req.verify_command is not None else verification_command(plan, subtask.id)
+    except VerificationNotDeclared as exc:
+        raise UsageError(str(exc)) from exc
     adapter = adapter or ADAPTERS[req.provider]()
     problems: list[str] = []
     preview: dict[str, Any] = {
@@ -517,7 +525,6 @@ def preview_worker(
                           mode=req.mode, worktree=req.worktree, branch=info.branch,
                           board_path=req.state_root.tasks / req.task_id / "plan.md", commit=commit)
     preview["prompt_sha256"] = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-    verify = req.verify_command if req.verify_command is not None else verification_command(plan, subtask.id)
     preview["verify_command"] = verify
     # the paths below are never created in a dry run; adapters only build argv from them
     run_dir = req.state_root.path / "runs" / "dry-run"

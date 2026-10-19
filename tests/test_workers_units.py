@@ -4,6 +4,7 @@ Nothing here launches a process.
 """
 
 from pathlib import Path
+from dataclasses import replace
 
 import pytest
 
@@ -20,7 +21,7 @@ from multi_agent_ai.workers.copilot import (
     final_message_from_events,
     verification_pattern,
 )
-from multi_agent_ai.workers.prompt import build_prompt, verification_command
+from multi_agent_ai.workers.prompt import VerificationNotDeclared, build_prompt, verification_command
 from multi_agent_ai.workers.runner import ADAPTERS
 
 WT = Path(r"C:\work\wt T1")
@@ -207,7 +208,33 @@ def test_prompt_implement_mode_differs_only_in_mode_text():
 
 
 def test_verification_command_is_the_last_inline_command():
-    assert verification_command(make_plan(), "T1") == r".venv\Scripts\python -m pytest -q"
+    plan = make_plan()
+    plan = replace(plan, subtasks=(plan.subtasks[0],))
+    assert verification_command(plan, "T1") == r".venv\Scripts\python -m pytest -q"
+
+
+def test_verification_command_uses_matching_per_subtask_entry():
+    plan = make_plan()
+    plan = replace(plan, body=plan.body + "\n## Verification\n"
+                   "verify: T1: `python -m pytest tests/test_one.py -q`\n"
+                   "verify: T2: `python -m pytest tests/test_two.py -q`\n")
+    assert verification_command(plan, "T1") == "python -m pytest tests/test_one.py -q"
+
+
+def test_verification_command_requires_entries_for_multiple_subtasks():
+    with pytest.raises(VerificationNotDeclared, match="no 'verify: T1:' entry"):
+        verification_command(make_plan(), "T1")
+
+
+def test_verification_command_accepts_bullets_and_rejects_prose():
+    plan = replace(make_plan(), body=make_plan().body +
+                   "\n## Verification\n- verify: T1: `python one.py`\n"
+                   "1. verify: T2: `python two.py`\n")
+    assert verification_command(plan, "T1") == "python one.py"
+    assert verification_command(plan, "T2") == "python two.py"
+    prose = replace(make_plan(), subtasks=(make_plan().subtasks[0],), body="## Verification\nverify: the output")
+    with pytest.raises(VerificationNotDeclared, match="no backticked command"):
+        verification_command(prose, "T1")
 
 
 # --- failure classification (table-driven) -----------------------------------------------------
