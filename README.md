@@ -125,6 +125,87 @@ The source protocol also defines bounded response watches, cleanup ownership, an
 
 Windows implementation must correctly resolve `.exe`, `.cmd`, and `.bat` entrypoints, manage process trees, stream logs, tolerate UTF-8 BOMs, and classify configuration/authentication failures without blindly retrying. Git worktrees provide editing isolation **but are not a security boundary**.
 
+## Quick start
+
+There is no installer or UI yet; everything is a command-line tool. This walkthrough uses a
+throwaway Git repository and starts no AI agent and uses no provider quota.
+
+**You need:** Windows 10/11, Python 3.11 or newer (`py -3.12 --version`), and Git. The `codex`
+and `copilot` command-line tools are not needed for the dry run, but the dry run reports a
+problem if the one you pick is missing. Install them and sign in separately before any real run.
+
+**1. Install** (PowerShell, in this repository):
+
+```powershell
+py -3.12 -m venv .venv
+.venv\Scripts\python -m pip install -e .[dev]
+```
+
+**2. Create a practice project** (any Git repository with at least one commit works):
+
+```powershell
+git init demo
+cd demo
+"hello" | Out-File README.md -Encoding ascii
+git add .; git commit -m init
+cd ..
+```
+
+**3. Initialise the coordination state** in that project:
+
+```powershell
+.venv\Scripts\multi-agent-ai init --project-root demo
+```
+
+This creates `demo\.multi-agent-ai\` (messages, tasks and a SQLite index). Keep that folder out
+of Git, for example by adding it to `demo\.gitignore`.
+
+**4. Write a tiny plan.** Save the following as `demo\.multi-agent-ai\tasks\demo\plan.md`
+(create the `tasks\demo` folders). The table is what the tool reads; the file formats are in
+[docs/protocol/formats.md](docs/protocol/formats.md).
+
+```text
+task: demo
+coordinator: me
+revision: 1
+updated: 2026-10-19 12:00
+
+## Goal
+
+Review the README.
+
+## Verification
+
+`git status`
+
+| id | what | files/area | depends on | worktree | owner | reviewer | state |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| R1 | review README | README.md | - | no | codex-w1 | waived | assigned |
+```
+
+Check that it parses:
+
+```powershell
+.venv\Scripts\multi-agent-ai inspect --project-root demo
+```
+
+**5. Run a first job as a dry run.** `worker run` only checks and prints what it would do unless
+you add `--execute`:
+
+```powershell
+.venv\Scripts\multi-agent-ai worker run --project-root demo --provider codex `
+    --task demo --subtask R1 --agent-id codex-w1 --mode review --worktree (Resolve-Path demo)
+```
+
+You should see `dry run: nothing was written or started` and a JSON description with the
+provider, the commit to review and the exact command line. An empty `"problems": []` means a real
+run would be accepted; otherwise each problem is listed (for example `codex` not found on `PATH`)
+and the exit code is 1. A real run needs `--execute`, uses provider quota, and should only be
+done after you read the printed command.
+
+Next: the [protocol](docs/protocol/agent-messaging.md) explains messages and joint tasks, and
+[docs/implementation-status.md](docs/implementation-status.md) lists what works today.
+
 ## Current implementation
 
 The first package (milestone M0) implements the protocol/state foundation plus read-only
