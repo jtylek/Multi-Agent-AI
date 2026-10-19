@@ -12,6 +12,7 @@ from test_workers_runner import GIT, env, only_fakes, task_dir  # noqa: F401 (fi
 
 from multi_agent_ai.board import read_statuses
 from multi_agent_ai.cli import main
+from multi_agent_ai.state import StateIndex
 from multi_agent_ai.workers import failures as fc
 from multi_agent_ai.workers import quota
 from multi_agent_ai.workers.runner import UsageError, run_worker
@@ -145,6 +146,20 @@ def test_claude_review_limit_has_no_resume_command(env, monkeypatch):
     env.configure(stdout=json.dumps({**RESULT, "is_error": True, "result": LIMIT_TEXT}), exit=1)
     outcome = run(env, cli_version="2.1.301")
     assert outcome.failure_class == fc.QUOTA_EXHAUSTED and outcome.result["limit"]["resume_command"] is None
+
+
+def test_claude_version_is_probed_recorded_and_keys_the_quota_table(env, monkeypatch):
+    env.install("claude")
+    env.configure(stdout=json.dumps({**RESULT, "is_error": True, "result": LIMIT_TEXT}), exit=1,
+                  version="2.1.301 (Claude Code)")
+    outcome = run(env, mode="implement")
+    assert outcome.result["cli_version"]["version"] == "2.1.301" and outcome.failure_class == fc.PROVIDER_ERROR
+    detector, _ = quota.DETECTORS["claude"]
+    monkeypatch.setitem(quota.DETECTORS, "claude", (detector, frozenset({"2.1.301"})))
+    assert run(env, mode="implement", agent_id="claude-w2").failure_class == fc.QUOTA_EXHAUSTED
+    with StateIndex.open(env.root.database_path) as index:
+        assert index.attempt_details(outcome.attempt_id)["cli_version"] == "2.1.301"
+    assert env.record()["argv"][0] == "-p"  # the recorded launch is the real run, not the --version probe
 
 
 # --- --max-budget-usd ---------------------------------------------------------------------------

@@ -329,7 +329,25 @@ copilot -C <wt> -p <PROMPT> --output-format json --silent --session-id <uuid>
         --allow-tool=shell(git diff),shell(git log),shell(git show),shell(<verify>)
         --deny-tool=shell(git commit),shell(git push),url
   implement: --available-tools=bash,create,edit,view,grep,glob and ",write" appended to --allow-tool
+
+claude -p --output-format=json --restricted --safe-mode --strict-mcp-config --disable-slash-commands
+       --no-chrome --permission-prompts=none [--model=M] [--max-budget-usd=N]
+       --tools=Read,Grep,Glob,PowerShell
+       --allowedTools=Read,Grep,Glob,PowerShell(git diff *),PowerShell(git log *),PowerShell(git show *),
+                      PowerShell(git status *),PowerShell(<verify>)
+       --disallowedTools=Edit,Write,NotebookEdit,WebFetch,WebSearch,PowerShell(git commit *),...
+       --no-session-persistence                       (prompt on stdin)
+  implement: Edit,Write added to --tools/--allowedTools and removed from the deny list, and
+             --session-id=<uuid> instead of --no-session-persistence
 ```
+
+Claude workers: `--restricted` ignores the user's and project's settings files and confines file
+tools to the worktree, `--safe-mode` turns off CLAUDE.md, hooks, skills and MCP while sign-in keeps
+working, and `--permission-mode` is never passed. The shell tool (`PowerShell`, or `Bash`) is a
+profile data field. A parent Claude Code session's `CLAUDECODE`, `CLAUDE_CODE_*` and `ANTHROPIC_*`
+variables are not passed to the worker (allowlisted environment); sign-in comes from the user
+profile, and an API key or token needs an explicit `--pass-env`. A worker shares the account's
+usage limit with the interactive coordinator session.
 
 `--ephemeral` (review runs only) keeps a managed Codex review out of Codex's persisted sessions.
 Implement runs keep their session so a usage limit can be resumed with `codex exec resume <id>`
