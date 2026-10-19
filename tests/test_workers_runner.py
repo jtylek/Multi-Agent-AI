@@ -35,6 +35,9 @@ here = pathlib.Path(__file__).resolve().parent
 cfg_file = here / "fake-config.json"
 cfg = json.loads(cfg_file.read_text(encoding="utf-8")) if cfg_file.exists() else {}
 args = sys.argv[1:]
+if args == ["--version"]:  # the version probe: answered without counting as a launch
+    sys.stdout.write(cfg.get("version", "fake-cli 1.2.3"))
+    sys.exit(cfg.get("version_exit", 0))
 stdin = sys.stdin.read()
 record = {"argv": args, "stdin": stdin, "cwd": os.getcwd(), "env": sorted(os.environ)}
 (here / "fake-record.json").write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
@@ -421,13 +424,13 @@ def test_bare_429_is_a_provider_error_and_a_plain_failure_stays_nonzero_exit(env
 
 def test_run_worker_without_a_known_cli_version_never_reports_quota(env, trusted_versions):
     env.install("codex")
-    env.configure(stdout=CODEX_LIMIT, exit=1)
-    outcome = env.run()  # no cli_version: the live path knows none and never probes
+    env.configure(stdout=CODEX_LIMIT, exit=1, version_exit=1)
+    outcome = env.run()  # no cli_version supplied and the probe fails: the version stays unknown
     assert outcome.failure_class == fc.PROVIDER_ERROR
     assert "unknown" in outcome.result["limit"]["reason"] and outcome.result["limit"]["reset"] is None
     status = read_statuses(task_dir(env))["codex-w1"].value
     assert status.blockers.startswith("provider_error") and not status.blockers.startswith("quota:")
-    env.configure(stdout=CODEX_LIMIT, exit=1)
+    env.configure(stdout=CODEX_LIMIT, exit=1, version_exit=1)
     assert env.run(agent_id="codex-w2", cli_version="9.9.9").failure_class == fc.PROVIDER_ERROR  # unlisted
 
 
@@ -435,6 +438,72 @@ def test_shipped_tables_make_every_real_run_provider_error(env):
     env.install("codex")
     env.configure(stdout=CODEX_LIMIT, exit=1)
     assert env.run(cli_version="0.163.0").failure_class == fc.PROVIDER_ERROR  # no version is listed yet
+
+
+# --- CLI version (T18) ---------------------------------------------------------------------------
+
+
+def test_cli_version_is_read_from_the_cli_and_recorded(env):
+    env.install("codex")
+    env.configure(stdout=CODEX_OK, final=FINAL, version="codex-cli 0.163.0")
+    outcome = env.run()
+    assert outcome.failure_class is None
+    assert outcome.result["cli_version"] == {"version": "0.163.0", "raw": "codex-cli 0.163.0", "error": None}
+    assert env.record()["argv"][0] == "exec"  # the recorded launch is the real run, not the probe
+    with StateIndex.open(env.root.database_path) as index:
+        assert index.attempt_details(outcome.attempt_id)["cli_version"] == "0.163.0"
+
+
+def test_probed_version_keys_the_quota_tables(env, monkeypatch):
+    from multi_agent_ai.workers import quota
+
+    detector, _ = quota.DETECTORS["codex"]
+    env.install("codex")
+    env.configure(stdout=CODEX_LIMIT, exit=1, version="codex-cli 7.7.7")
+    monkeypatch.setitem(quota.DETECTORS, "codex", (detector, frozenset({"7.7.7"})))
+    assert env.run().failure_class == fc.QUOTA_EXHAUSTED  # listed version, read from the CLI itself
+    monkeypatch.setitem(quota.DETECTORS, "codex", (detector, frozenset({"1.0.0"})))
+    other = env.run(agent_id="codex-w2")
+    assert other.failure_class == fc.PROVIDER_ERROR and "unlisted 7.7.7" in other.result["limit"]["reason"]
+
+
+def test_failed_version_probe_is_recorded_and_does_not_block_the_run(env, monkeypatch):
+    from multi_agent_ai.workers import quota
+
+    detector, _ = quota.DETECTORS["codex"]
+    monkeypatch.setitem(quota.DETECTORS, "codex", (detector, frozenset({"7.7.7"})))
+    env.install("codex")
+    env.configure(stdout=CODEX_LIMIT, exit=1, version="boom", version_exit=1)
+    outcome = env.run()
+    assert outcome.result["cli_version"]["version"] is None and "exited 1" in outcome.result["cli_version"]["error"]
+    assert any("cli version unknown" in f for f in outcome.result["findings"])
+    assert outcome.failure_class == fc.PROVIDER_ERROR  # unknown version: never a quota verdict
+
+
+def test_version_reader_can_be_injected_and_cli_version_overrides_the_probe(env):
+    from multi_agent_ai.workers.versions import CliVersion
+
+    env.install("codex")
+    env.configure(stdout=CODEX_OK, final=FINAL)
+    calls = []
+
+    def reader(command, child_env):
+        calls.append(command.name)
+        return CliVersion("2.0.0", "fake")
+
+    outcome = run_worker(env.request(), env=env.env, version_reader=reader)
+    assert calls == ["codex"] and outcome.result["cli_version"]["version"] == "2.0.0"
+    outcome = run_worker(env.request(agent_id="codex-w2"), env=env.env, version_reader=reader, cli_version="3.0.0")
+    assert calls == ["codex"] and outcome.result["cli_version"]["version"] == "3.0.0"
+
+
+def test_dry_run_does_not_probe_the_cli(env, monkeypatch, capsys):
+    env.install("codex")
+    env.configure(stdout=CODEX_OK, final=FINAL, version="codex-cli 0.163.0")
+    monkeypatch.setenv("PATH", f"{env.fake_dir}{os.pathsep}{Path(GIT).parent}")
+    code = main(["worker", "run", "--provider", "codex", "--task", "demo", "--subtask", "T1", "--agent-id",
+                 "codex-w1", "--mode", "review", "--worktree", str(env.worktree), "--project-root", str(env.primary)])
+    assert code == 0 and "not probed" in json.loads(capsys.readouterr().out)["cli_version"]
 
 
 def test_a_limit_message_on_a_successful_exit_is_not_reclassified(env):

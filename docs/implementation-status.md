@@ -61,12 +61,17 @@ listed below is planned, not implemented.
   `quota_exhausted`, `cap_reached`, `provider_error`; detector tables (Codex structured events;
   Claude and Copilot patterns are synthetic until real samples exist; **quota detection becomes
   active only once a provider's CLI version is positively known and listed in the detector
-  table. No table lists a version yet and the runner never probes the version (a probe could use
-  quota), so today every limit signature is reported as `provider_error` with the raw output**), reported-only reset
+  table. The runner reads the version from the CLI's own `--version` (T18) but no table lists a
+  version yet, so today every limit signature is reported as `provider_error` with the raw
+  output**), reported-only reset
   parsing, `quota:`/`cap:` blocker in the worker status, suspended stale-worker rule, a `limit`
   record with the resume command. Not implemented: WIP `checkpoint:` commits, automatic
-  linked resume attempts, a CLI version probe (the detector version check is exercised in unit
-  tests only). Tested only with fake executables; **no real provider run has been
+  linked resume attempts. CLI version detection (T18, `workers/versions.py`): `<cli> --version`
+  is a local flag (no sign-in, no provider call, so no quota; bounded by a 15 s timeout, no shell,
+  closed stdin, process-tree kill, same allowlisted environment), run once per `worker run
+  --execute` after the command is resolved; the parsed `x.y.z` and the raw text are recorded in
+  `result.json` (`cli_version`) and the SQLite attempt details; a failed or unparseable probe is
+  recorded as unknown and never blocks the run; a dry run does not probe. Tested only with fake executables; **no real provider run has been
   made yet** (planned after integration, with the user's OK).
 - Tests in `tests/` cover every valid and invalid example in formats.md, plus the D8 rule
   that exit codes and notification transport never create an ack or a completion.

@@ -220,8 +220,7 @@ def detect(
     """A positively identified limit, a ``provider_error`` for a throttle-like message, or None.
 
     A quota or cap verdict needs a positively known CLI version that the provider's table lists.
-    An unknown version (``cli_version=None``, as in every run today: no version probe, because
-    probing could use quota) or a table without versions (synthetic fixtures only) yields
+    An unknown version (``cli_version=None``: the ``--version`` probe failed or was not run) or a table without versions (synthetic fixtures only) yields
     ``provider_error`` carrying the raw output, never a quota verdict.
     """
     now = now or datetime.now(timezone.utc)
