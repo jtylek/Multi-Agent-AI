@@ -12,6 +12,7 @@ from .board import check_revision_progress
 from .grammar import parse_timestamp
 from .notify import format_notify, notify_message
 from .reachability import discover_agents
+from .registry import reservation_conflicts, read_registry
 from .report import format_text, index_entries, scan, to_dict
 from .state import StateIndex, init_state_root, read_config, resolve_state_root
 
@@ -28,6 +29,7 @@ def _parser() -> argparse.ArgumentParser:
         "index": "rebuild the derived SQLite index from the coordination files",
         "agents": "discover reachable Claude sessions and Codex threads for the project root (read-only)",
         "notify": "notify recipients of a durable mailbox request without creating acknowledgments",
+        "registry": "show registered agents and optionally check a file/area reservation",
     }
     for name, help_text in commands.items():
         cmd = sub.add_parser(name, help=help_text, description=help_text)
@@ -37,7 +39,7 @@ def _parser() -> argparse.ArgumentParser:
             default=None,
             help="state root, absolute or relative to the project root (default: .multi-agent-ai)",
         )
-        if name in {"inspect", "agents", "notify"}:
+        if name in {"inspect", "agents", "notify", "registry"}:
             cmd.add_argument("--json", action="store_true", help="machine-readable output")
         if name == "agents":
             cmd.add_argument("--timeout", type=float, default=15, help="provider discovery timeout in seconds")
@@ -46,6 +48,10 @@ def _parser() -> argparse.ArgumentParser:
             cmd.add_argument("--timeout", type=float, default=15, help="transport timeout in seconds")
             cmd.add_argument("--send", action="store_true", help="send notifications (default is dry-run)")
         if name == "inspect":
+            cmd.add_argument("--now", help="evaluate staleness at this local time (YYYY-MM-DD HH:MM)")
+        if name == "registry":
+            cmd.add_argument("--files", action="append", default=[], help="file/area to check (repeatable)")
+            cmd.add_argument("--agent-id", default=None, help="exclude this agent's own reservation")
             cmd.add_argument("--now", help="evaluate staleness at this local time (YYYY-MM-DD HH:MM)")
     doctor = sub.add_parser("doctor", help="check this machine is ready (read-only; runs only --version)",
                             description="Read-only readiness checks: Python, Git, the provider CLIs (found, version; "
@@ -114,6 +120,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             sys.stdout.write(format_text(report))
         return 0
+
+    if args.command == "registry":
+        now = parse_timestamp(args.now).value if args.now else datetime.now()
+        entries = read_registry(root.path)
+        conflicts = reservation_conflicts(root.path, args.files, agent=args.agent_id, now=now) if args.files else []
+        if args.json:
+            payload = {
+                "entries": [
+                    {"agent": agent, "valid": parsed.ok, "errors": parsed.errors,
+                     "warnings": parsed.warnings,
+                     **({"started": parsed.value.started, "updated": parsed.value.updated,
+                         "task": parsed.value.task, "files": parsed.value.files,
+                         "status": parsed.value.status, "contact": parsed.value.contact}
+                        if parsed.value else {})}
+                    for agent, parsed in entries.items()
+                ],
+                "conflicts": [vars(item) for item in conflicts],
+            }
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+        else:
+            for agent, parsed in entries.items():
+                if parsed.value is None:
+                    print(f"{agent}\tinvalid: {'; '.join(parsed.errors)}")
+                else:
+                    print(f"{agent}\t{parsed.value.status}\t{parsed.value.task}\t{parsed.value.files}")
+            for conflict in conflicts:
+                print(f"conflict\t{conflict.agent}\t{', '.join(conflict.shared)}")
+        return 1 if conflicts else 0
 
     if args.command == "notify":
         if not root.path.is_dir():
