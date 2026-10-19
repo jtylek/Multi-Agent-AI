@@ -59,7 +59,10 @@ listed below is planned, not implemented.
   layout; attempts in the SQLite index (`Attempt` record plus an `attempt_details` table for
   mode, usage and timings). Usage-limit handling (T15, `workers/quota.py`): failure classes
   `quota_exhausted`, `cap_reached`, `provider_error`; detector tables (Codex structured events;
-  Claude and Copilot patterns are synthetic until real samples exist), reported-only reset
+  Claude and Copilot patterns are synthetic until real samples exist; **quota detection becomes
+  active only once a provider's CLI version is positively known and listed in the detector
+  table. No table lists a version yet and the runner never probes the version (a probe could use
+  quota), so today every limit signature is reported as `provider_error` with the raw output**), reported-only reset
   parsing, `quota:`/`cap:` blocker in the worker status, suspended stale-worker rule, a `limit`
   record with the resume command. Not implemented: WIP `checkpoint:` commits, automatic
   linked resume attempts, a CLI version probe (the detector version check is exercised in unit

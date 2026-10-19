@@ -16,6 +16,18 @@ from multi_agent_ai.models import Status
 from multi_agent_ai.workers import failures as fc
 from multi_agent_ai.workers import quota
 
+@pytest.fixture(autouse=True)
+def versioned_tables(monkeypatch):
+    """Pretend every detector table lists version "t1" (the shipped tables list none yet)."""
+    for provider, (detector, _) in quota.DETECTORS.items():
+        monkeypatch.setitem(quota.DETECTORS, provider, (detector, frozenset({"t1"})))
+
+
+def detect(provider, stdout, stderr, **kw):
+    kw.setdefault("cli_version", "t1")
+    return quota.detect(provider, stdout, stderr, **kw)
+
+
 NOW = datetime(2026, 10, 19, 18, 0, tzinfo=timezone.utc)
 BUDAPEST = timezone(timedelta(hours=2), "Europe/Budapest")  # CEST on this date; stands in for the tz database
 
@@ -80,53 +92,62 @@ def test_epoch_seconds_and_milliseconds():
 
 
 def test_codex_structured_limit_with_reported_reset():
-    found = quota.detect("codex", codex_limit(), "", now=NOW)
+    found = detect("codex", codex_limit(), "", now=NOW)
     assert found.kind == quota.QUOTA_EXHAUSTED and found.reason == "rate_limit_reached_type=primary"
     assert found.reset == datetime.fromtimestamp(1792000000, timezone.utc)
     assert found.reset_text.startswith("resets 2026-") and found.reset_text.endswith("UTC (reported)")
 
 
 def test_codex_spend_control_without_a_window_has_unknown_reset():
-    found = quota.detect("codex", codex_limit(reached=None, spend=True), "", now=NOW)
+    found = detect("codex", codex_limit(reached=None, spend=True), "", now=NOW)
     assert found.kind == quota.QUOTA_EXHAUSTED and found.reset is None and found.reset_text == "reset unknown"
 
 
 def test_codex_rate_limits_below_the_limit_are_not_a_limit():
-    assert quota.detect("codex", codex_limit(reached=None), "", now=NOW) is None
+    assert detect("codex", codex_limit(reached=None), "", now=NOW) is None
 
 
 def test_codex_prose_without_structured_fields_is_not_quota():
-    assert quota.detect("codex", "", "usage limit hit, try later", now=NOW) is None
+    assert detect("codex", "", "usage limit hit, try later", now=NOW) is None
 
 
 def test_claude_requires_all_three_signals():
-    found = quota.detect("claude", "", CLAUDE_LIMIT, now=NOW, zone_lookup=lookup)
+    found = detect("claude", "", CLAUDE_LIMIT, now=NOW, zone_lookup=lookup)
     assert found.kind == quota.QUOTA_EXHAUSTED and found.reset == datetime(2026, 10, 19, 21, 10, tzinfo=BUDAPEST)
     assert "session limit" in found.raw_message
-    bare = quota.detect("claude", "", "API error 429 rate_limit: slow down", now=NOW)
+    bare = detect("claude", "", "API error 429 rate_limit: slow down", now=NOW)
     assert bare.kind == quota.PROVIDER_ERROR  # 429 alone is throttling, not exhaustion
 
 
 def test_copilot_cap_vs_quota_vs_throttle():
-    cap = quota.detect("copilot", "", "Stopped: --max-ai-credits 5 reached", now=NOW)
+    cap = detect("copilot", "", "Stopped: --max-ai-credits 5 reached", now=NOW)
     assert cap.kind == quota.CAP_REACHED and cap.reset is None
-    exhausted = quota.detect("copilot", "", "You've reached your monthly premium requests quota.", now=NOW)
+    exhausted = detect("copilot", "", "You've reached your monthly premium requests quota.", now=NOW)
     assert exhausted.kind == quota.QUOTA_EXHAUSTED
-    assert quota.detect("copilot", "", "HTTP 429 Too Many Requests", now=NOW).kind == quota.PROVIDER_ERROR
-    assert quota.detect("copilot", "", "something broke", now=NOW) is None
+    assert detect("copilot", "", "HTTP 429 Too Many Requests", now=NOW).kind == quota.PROVIDER_ERROR
+    assert detect("copilot", "", "something broke", now=NOW) is None
 
 
-def test_unknown_cli_version_falls_back_to_provider_error(monkeypatch):
-    detector, _ = quota.DETECTORS["codex"]
-    monkeypatch.setitem(quota.DETECTORS, "codex", (detector, frozenset({"0.163.0"})))
-    assert quota.detect("codex", codex_limit(), "", now=NOW, cli_version="0.163.0").kind == quota.QUOTA_EXHAUSTED
-    odd = quota.detect("codex", codex_limit(), "", now=NOW, cli_version="9.9.9")
+def test_unlisted_or_unknown_cli_version_falls_back_to_provider_error():
+    listed = detect("codex", codex_limit(), "", now=NOW)
+    assert listed.kind == quota.QUOTA_EXHAUSTED
+    odd = detect("codex", codex_limit(), "", now=NOW, cli_version="9.9.9")
     assert odd.kind == quota.PROVIDER_ERROR and "9.9.9" in odd.reason and odd.raw_message
+    unknown = detect("codex", codex_limit(), "", now=NOW, cli_version=None)
+    assert unknown.kind == quota.PROVIDER_ERROR and "unknown" in unknown.reason and unknown.reset is None
+    assert detect("claude", "", CLAUDE_LIMIT, now=NOW, cli_version=None).kind == quota.PROVIDER_ERROR
+    assert detect("copilot", "", "--max-ai-credits 5 reached", now=NOW, cli_version=None).kind == quota.PROVIDER_ERROR
+
+
+def test_shipped_tables_trust_no_version_yet(monkeypatch):
+    monkeypatch.undo()
+    assert all(versions is None for _, versions in quota.DETECTORS.values())
+    assert quota.detect("codex", codex_limit(), "", now=NOW, cli_version="0.163.0").kind == quota.PROVIDER_ERROR
 
 
 def test_unknown_provider_still_reports_throttling_only():
-    assert quota.detect("future", "", "429 Too Many Requests", now=NOW).kind == quota.PROVIDER_ERROR
-    assert quota.detect("future", "", "plain failure", now=NOW) is None
+    assert detect("future", "", "429 Too Many Requests", now=NOW).kind == quota.PROVIDER_ERROR
+    assert detect("future", "", "plain failure", now=NOW) is None
 
 
 # --- classification -----------------------------------------------------------------------------

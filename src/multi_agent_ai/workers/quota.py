@@ -208,7 +208,9 @@ DETECTORS: dict[str, tuple[Detector, "frozenset[str] | None"]] = {
     "claude": (_claude, None),
     "copilot": (_copilot, None),
 }
-"""Add a real, versioned sample here (``frozenset({"x.y.z"})``) once one has been captured."""
+"""``None`` = synthetic fixtures only, so no run is trusted yet: quota detection becomes active for
+a provider once a real sample is recorded and its CLI version is added here as
+``frozenset({"x.y.z"})`` AND the runner positively knows the version it launched."""
 
 
 def detect(
@@ -217,22 +219,22 @@ def detect(
 ) -> LimitFinding | None:
     """A positively identified limit, a ``provider_error`` for a throttle-like message, or None.
 
-    A ``cli_version`` that the provider's table does not list yields ``provider_error`` carrying
-    the raw output instead of a quota verdict.
+    A quota or cap verdict needs a positively known CLI version that the provider's table lists.
+    An unknown version (``cli_version=None``, as in every run today: no version probe, because
+    probing could use quota) or a table without versions (synthetic fixtures only) yields
+    ``provider_error`` carrying the raw output, never a quota verdict.
     """
     now = now or datetime.now(timezone.utc)
     entry = DETECTORS.get(provider)
     if entry is not None:
         detector, versions = entry
-        if versions is not None and cli_version is not None and cli_version not in versions:
-            text = f"{stderr}\n{stdout}"
-            if _PROVIDER_ERROR.search(text) or detector(stdout, stderr, now, zone_lookup):
-                return LimitFinding(PROVIDER_ERROR, provider, _one_line(text, 500),
-                                    reason=f"unknown {provider} CLI version {cli_version}")
-            return None
         found = detector(stdout, stderr, now, zone_lookup)
         if found is not None:
-            return found
+            if versions is not None and cli_version is not None and cli_version in versions:
+                return found
+            known = "unknown" if cli_version is None else f"unlisted {cli_version}"
+            return LimitFinding(PROVIDER_ERROR, provider, _one_line(f"{stderr}\n{stdout}", 500),
+                                reason=f"{provider} CLI version {known}: {found.kind} signature not trusted")
     text = f"{stderr}\n{stdout}"
     match = _PROVIDER_ERROR.search(text)
     if match:

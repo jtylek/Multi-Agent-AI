@@ -149,8 +149,8 @@ class Env:
         values.update(kw)
         return WorkerRequest(**values)
 
-    def run(self, resolver=None, **kw):
-        return run_worker(self.request(**kw), env=self.env, resolver=resolver)
+    def run(self, resolver=None, cli_version=None, **kw):
+        return run_worker(self.request(**kw), env=self.env, resolver=resolver, cli_version=cli_version)
 
     def direct_resolver(self):
         """Run the fake as an exe (python + script) so argv is not limited by cmd.exe."""
@@ -356,15 +356,24 @@ def test_not_a_git_worktree_is_environment(env):
 # --- usage limits (T15; synthetic provider output) ----------------------------------------------
 
 
+@pytest.fixture
+def trusted_versions(monkeypatch):
+    """List version "t1" for every detector table; the shipped tables list none yet."""
+    from multi_agent_ai.workers import quota
+
+    for provider, (detector, _) in quota.DETECTORS.items():
+        monkeypatch.setitem(quota.DETECTORS, provider, (detector, frozenset({"t1"})))
+
+
 CODEX_LIMIT = ('{"type":"thread.started","thread_id":"thr-9"}\n'
                '{"type":"token_count","rate_limits":{"rate_limit_reached_type":"primary",'
                '"primary":{"used_percent":100,"resets_at":1792000000}}}\n')
 
 
-def test_codex_quota_exhausted_records_blocker_limit_and_resume(env):
+def test_codex_quota_exhausted_records_blocker_limit_and_resume(env, trusted_versions):
     env.install("codex")
     env.configure(stdout=CODEX_LIMIT, exit=1, write={"src/partial.py": "x = 1\n"})
-    outcome = env.run(mode="implement", model="gpt-5")
+    outcome = env.run(mode="implement", model="gpt-5", cli_version="t1")
     assert outcome.failure_class == fc.QUOTA_EXHAUSTED and outcome.commit is None
     limit = outcome.result["limit"]
     assert limit["kind"] == "quota_exhausted" and limit["session"] == "thr-9"
@@ -382,19 +391,19 @@ def test_codex_quota_exhausted_records_blocker_limit_and_resume(env):
     assert no_acks_anywhere(env)
 
 
-def test_unknown_reset_is_reported_as_unknown(env):
+def test_unknown_reset_is_reported_as_unknown(env, trusted_versions):
     env.install("codex")
     env.configure(stdout='{"type":"token_count","rate_limits":{"spend_control_reached":true}}\n', exit=1)
-    outcome = env.run()
+    outcome = env.run(cli_version="t1")
     assert outcome.failure_class == fc.QUOTA_EXHAUSTED and outcome.result["limit"]["reset"] is None
     status = read_statuses(task_dir(env))["codex-w1"].value
     assert status.blockers == "quota: codex (provider default), reset unknown"
 
 
-def test_copilot_cap_uses_the_cap_prefix(env):
+def test_copilot_cap_uses_the_cap_prefix(env, trusted_versions):
     env.install("copilot")
     env.configure(stderr="Stopped: --max-ai-credits 5 reached", exit=1)
-    outcome = env.run(env.direct_resolver(), provider="copilot", agent_id="copilot-w1")
+    outcome = env.run(env.direct_resolver(), provider="copilot", agent_id="copilot-w1", cli_version="t1")
     assert outcome.failure_class == fc.CAP_REACHED
     assert outcome.result["limit"]["resume_command"].startswith("copilot --resume ")
     status = read_statuses(task_dir(env))["copilot-w1"].value
@@ -408,6 +417,24 @@ def test_bare_429_is_a_provider_error_and_a_plain_failure_stays_nonzero_exit(env
     assert throttled.failure_class == fc.PROVIDER_ERROR and throttled.result["limit"]["counts_toward_success_rate"]
     env.configure(stdout=CODEX_OK, stderr="something broke", exit=3)
     assert env.run().failure_class == fc.NONZERO_EXIT
+
+
+def test_run_worker_without_a_known_cli_version_never_reports_quota(env, trusted_versions):
+    env.install("codex")
+    env.configure(stdout=CODEX_LIMIT, exit=1)
+    outcome = env.run()  # no cli_version: the live path knows none and never probes
+    assert outcome.failure_class == fc.PROVIDER_ERROR
+    assert "unknown" in outcome.result["limit"]["reason"] and outcome.result["limit"]["reset"] is None
+    status = read_statuses(task_dir(env))["codex-w1"].value
+    assert status.blockers.startswith("provider_error") and not status.blockers.startswith("quota:")
+    env.configure(stdout=CODEX_LIMIT, exit=1)
+    assert env.run(agent_id="codex-w2", cli_version="9.9.9").failure_class == fc.PROVIDER_ERROR  # unlisted
+
+
+def test_shipped_tables_make_every_real_run_provider_error(env):
+    env.install("codex")
+    env.configure(stdout=CODEX_LIMIT, exit=1)
+    assert env.run(cli_version="0.163.0").failure_class == fc.PROVIDER_ERROR  # no version is listed yet
 
 
 def test_a_limit_message_on_a_successful_exit_is_not_reclassified(env):

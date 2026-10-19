@@ -251,9 +251,13 @@ def run_worker(
     adapter: ProviderAdapter | None = None,
     env: Mapping[str, str] | None = None,
     resolver: Callable[..., winproc.ResolvedCommand] | None = None,
+    cli_version: str | None = None,
 ) -> WorkerOutcome:
     """Run one attempt. Raises :class:`UsageError` before anything is written; afterwards
-    every outcome is recorded (runs dir, result.json, SQLite attempt, status file)."""
+    every outcome is recorded (runs dir, result.json, SQLite attempt, status file).
+
+    ``cli_version`` is the provider CLI version when positively known (no probe is ever run, as it
+    could use quota); without it a limit signature is reported as ``provider_error``."""
     validate_request(req)
     task_dir = req.state_root.tasks / req.task_id
     parsed = read_plan(task_dir)
@@ -395,7 +399,7 @@ def run_worker(
     if parsed_output.session:
         run.result["provider_session"] = parsed_output.session
     if result.exit_code != 0 and not result.timed_out:
-        finding = quota.detect(req.provider, stdout, stderr)  # positive identification only
+        finding = quota.detect(req.provider, stdout, stderr, cli_version=cli_version)  # positive identification only
         if finding is not None:
             run.limit = finding
             evidence["limit"] = finding.kind

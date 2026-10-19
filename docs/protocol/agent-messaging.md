@@ -363,7 +363,7 @@ is not started. The exact form of `<verify>` that Copilot matches (absolute
 `launch_error` (executable missing or not startable), `invalid_arguments` (refused before
 launch, or a nonzero exit whose output says so), `review_modified_files`,
 `git_policy_violation`, `timeout` (the whole process tree is killed), `unsupported_model`,
-`auth`, `permission_denied` (a tool or command was denied; reported, the profile is never
+`auth_error`, `permission_denied` (a tool or command was denied; reported, the profile is never
 widened), `nonzero_exit`, `malformed_output`, `no_changes` (implement run without a change),
 `commit_failed` (the orchestrator's commit, including hooks, failed). A denied permission goes
 back to the user; it is never routed to another agent to get around it.
@@ -375,7 +375,9 @@ exit, a bare 429 or a missing usage file alone is never quota evidence):
 Copilot `--max-ai-credits`) and `provider_error` (throttling or a generic API error, e.g. a bare
 429). Detector tables live in `workers/quota.py`; the Claude and Copilot patterns and the Codex
 event shape are synthetic until a real sample is recorded, and a CLI version a table does not
-list falls back to `provider_error` with the raw output. The reset time is only what the provider
+list, or an unknown one (no version probe is run, because it could use quota; today every real
+run), falls back to `provider_error` with the raw output, so quota verdicts become active only
+once a provider's CLI version is positively known and in the table. The reset time is only what the provider
 reports (epoch field, or a wall-clock time plus zone resolved with `zoneinfo`; a time earlier
 than now means next day; any failure, including a missing tz database, means `reset unknown`).
 The worker's own status file becomes `state: blocked` with `blockers: quota: <provider>
