@@ -127,6 +127,60 @@ def test_default_run_directory_is_outside_worktree(tmp_path):
     assert not Path(result.run_dir).resolve().is_relative_to(path.resolve())
 
 
+def test_run_directory_inside_worktree_is_excluded_from_clean_check(tmp_path):
+    path = repo(tmp_path)
+    result = verify(path, VerificationSpec(commands=(command("pass"),), expected_clean=True),
+                    run_dir=path / "runs" / "verify")
+    assert result.ok and result.dirty is False
+
+
+def test_cli_text_output_identifies_default_context_and_run_directory(tmp_path, monkeypatch, capsys):
+    path = repo(tmp_path)
+    init_state_root(path)
+    monkeypatch.chdir(path)
+    assert main(["verify", "--worktree", str(path), "--command", "git", "rev-parse", "HEAD"]) == 0
+    output = capsys.readouterr().out
+    assert "current directory" in output
+    assert "run directory:" in output
+
+
+def test_timeout_kills_process_tree(tmp_path):
+    path = repo(tmp_path)
+    child = path / "child.py"
+    child.write_text(
+        "import subprocess, sys, time\n"
+        "grand = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        "open(sys.argv[1], 'w').write(str(grand.pid))\n"
+        "time.sleep(60)\n", encoding="utf-8"
+    )
+    parent = path / "parent.py"
+    child_pid_file = path / "child.pid"
+    grand_pid_file = path / "grandchild.pid"
+    parent.write_text(
+        "import subprocess, sys, time, os\n"
+        "child = subprocess.Popen([sys.executable, sys.argv[1], sys.argv[2]])\n"
+        "open(sys.argv[3], 'w').write(str(child.pid))\n"
+        "time.sleep(60)\n", encoding="utf-8"
+    )
+    result = verify(path, VerificationSpec(
+        commands=(CommandSpec((sys.executable, str(parent), str(child), str(grand_pid_file), str(child_pid_file))),), timeout=1
+    ))
+    assert result.status == "verification_failed"
+    assert result.commands[0].timed_out
+    import time
+    deadline = time.time() + 5
+    while not child_pid_file.exists() or not grand_pid_file.exists():
+        if time.time() >= deadline:
+            break
+        time.sleep(0.05)
+    assert child_pid_file.exists() and grand_pid_file.exists()
+    pids = [int(child_pid_file.read_text(encoding="utf-8")), int(grand_pid_file.read_text(encoding="utf-8"))]
+    time.sleep(0.5)
+    for pid in pids:
+        probe = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True)
+        assert str(pid) not in probe.stdout
+
+
 def test_cli_task_subtask_uses_plan_entries_and_json_exit_codes(tmp_path, capsys):
     path = repo(tmp_path)
     root = init_state_root(path)

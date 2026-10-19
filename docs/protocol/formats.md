@@ -298,6 +298,10 @@ verify: T2: `python -m pytest tests/test_divide.py -q`
 An entry may optionally be a Markdown list item (`- verify: ...`, `* verify: ...`, or
 `1. verify: ...`).
 
+The inline command is parsed as shell-free Windows argv. Shell syntax is rejected, including
+`;`, `|`, `&`, `<`, `>`, and `%VAR%` environment expansion forms (and similar command-chain
+or redirection syntax); declare one executable and its arguments instead.
+
 The command is the inline-code span on the matching `verify: <subtask-id>:` line. The
 orchestrator passes the command to shell-free verification as an argv declaration; it must not
 interpret the line as a shell script. For backwards compatibility, a plan with one subtask and

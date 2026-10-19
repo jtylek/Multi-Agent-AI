@@ -78,7 +78,7 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--run-dir", default=None)
     verify.add_argument("--env", action="append", default=[], metavar="NAME",
                         help="environment variable name allowed through to commands")
-    verify.add_argument("--project-root", default=".", help="project root for the default run directory")
+    verify.add_argument("--project-root", default=None, help="project root for the default run directory")
     verify.add_argument("--state-root", default=None, help="state root for the default run directory")
     verify.add_argument("--json", action="store_true", help="machine-readable output")
     _add_worker_parser(sub)
@@ -105,7 +105,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         from .verify import CommandSpec, VerificationSpec, verify
 
-        root = resolve_state_root(args.project_root, args.state_root)
+        project_root_was_omitted = args.project_root is None
+        state_root_was_omitted = args.state_root is None
+        project_root = args.project_root or "."
+        root = resolve_state_root(project_root, args.state_root)
         from .verify import CommandSpec, VerificationSpec, parse_command, verify
 
         try:
@@ -132,7 +135,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.json:
             print(json.dumps(result.as_dict(), indent=2, ensure_ascii=False))
         else:
-            print(f"{result.status}: {result.run_dir} ({result.duration_seconds:.3f}s)")
+            if project_root_was_omitted and state_root_was_omitted:
+                print("project root: current directory (both --project-root and --state-root omitted)")
+            print(f"{result.status}; run directory: {result.run_dir} ({result.duration_seconds:.3f}s)")
             if result.error:
                 print(result.error, file=sys.stderr)
             for item in result.commands:
