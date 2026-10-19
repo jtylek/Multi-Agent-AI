@@ -65,8 +65,14 @@ deployment_requires_clean_tree = true
 def _render_profile(project_root: Path, state_root: Path) -> str:
     project_root = project_root.resolve()
     state_root = state_root.resolve()
-    project_relative = os.path.relpath(project_root, state_root).replace("\\", "/") or "."
-    state_relative = os.path.relpath(state_root, project_root).replace("\\", "/") or "."
+    try:
+        project_relative = os.path.relpath(project_root, state_root).replace("\\", "/") or "."
+        state_relative = os.path.relpath(state_root, project_root).replace("\\", "/") or "."
+    except ValueError:
+        # Relative paths are unavailable when the project and state roots are on
+        # different Windows drives; absolute paths remain unambiguous.
+        project_relative = project_root.as_posix()
+        state_relative = state_root.as_posix()
     if not state_relative.endswith("/"):
         state_relative += "/"
     return _PROFILE_TEMPLATE.replace("__PROJECT_ROOT__", project_relative).replace("__STATE_ROOT__", state_relative)
@@ -86,11 +92,12 @@ def ensure_starter_profile(project_root: Path | str = ".", state_root: Path | st
     """Create the starter profile once and never overwrite an existing profile."""
     path = profile_path(project_root, state_root)
     project = Path(project_root).resolve()
-    state = path.parent
+    state = path.parent.resolve()
+    text = _render_profile(project, state)
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with path.open("x", encoding="utf-8", newline="\n") as handle:
-            handle.write(_render_profile(project, state))
+            handle.write(text)
     except FileExistsError:
         pass
     return path

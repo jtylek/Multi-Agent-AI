@@ -1,7 +1,10 @@
 import tomllib
 from pathlib import Path
 
+import pytest
+
 from multi_agent_ai.cli import main
+from multi_agent_ai import profile
 from multi_agent_ai.profile import PROFILE_FILE, STARTER_PROFILE, ensure_starter_profile, profile_path
 from multi_agent_ai.state import init_state_root, read_config
 
@@ -62,3 +65,33 @@ def test_ensure_profile_is_idempotent_for_windows_style_project_path(tmp_path):
     before = first.read_bytes()
     second = ensure_starter_profile(project)
     assert first == second and second.read_bytes() == before
+
+
+def test_cross_drive_relpath_falls_back_to_absolute_paths(tmp_path, monkeypatch):
+    project = tmp_path / "Target Project"
+    state = tmp_path / "state-root"
+    project.mkdir()
+
+    def fail_relpath(*args):
+        raise ValueError("different drives")
+
+    monkeypatch.setattr(profile.os.path, "relpath", fail_relpath)
+    path = ensure_starter_profile(project, state)
+    document = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert document["profile"]["root"] == project.resolve().as_posix()
+    assert document["state"]["state_root"] == state.resolve().as_posix() + "/"
+
+
+def test_render_failure_does_not_leave_zero_byte_profile(tmp_path, monkeypatch):
+    project = tmp_path / "Target Project"
+    state = tmp_path / "state-root"
+    project.mkdir()
+    path = profile_path(project, state)
+
+    def fail_render(*args):
+        raise RuntimeError("render failed")
+
+    monkeypatch.setattr(profile, "_render_profile", fail_render)
+    with pytest.raises(RuntimeError, match="render failed"):
+        ensure_starter_profile(project, state)
+    assert not path.exists()
