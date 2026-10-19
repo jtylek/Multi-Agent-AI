@@ -34,6 +34,11 @@ listed below is planned, not implemented.
     messages with per-recipient ack state, tasks with plan revision and subtask states, and
     staleness/conflict findings. It creates no file; an existing index is opened read-only.
   - `index`: rebuilds the derived index and reports plan revisions lower than one seen.
+- Read-only reachability discovery (`reachability.py` and `agents`): exact-project-cwd Claude
+  sessions and Codex app-server threads, with provider errors reported separately.
+- Notification transport (`notify.py` and `notify`): dry-run by default; with explicit `--send`,
+  sends mailbox pointers through configured Codex/Copilot contacts and reports Claude/manual relay
+  targets. Transport is never an ack.
   - `worker run --provider codex|copilot --task T --subtask S --agent-id ID --mode
     review|implement --worktree ABS [--model M] [--timeout S] [--commit SHA]
     [--verify-command C] [--live-branch B]... [--pass-env NAME]...`: one managed headless

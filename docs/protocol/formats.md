@@ -223,6 +223,7 @@ must equal `agent`.
 | `last-commit` | yes | SHA or `none` |
 | `tests` | yes | scoped tests and results, or `none run` |
 | `blockers` | yes | text or `none` |
+| `contact` | no | how other agents can notify this agent: `codex queue --thread <uuid-or-name>`, `code chat`, `claude SendMessage <session-name>`, or `user prompt`. The value must not start with `-`. Until the registry exists this is where `multi-agent-ai notify` reads it; a registry `contact:` takes precedence later. |
 | `updated` | yes | timestamp (minute precision) |
 
 Staleness (two independent checks):
@@ -232,6 +233,13 @@ Staleness (two independent checks):
   invalid; trust neither file until reconciled.
 - **Stale worker**: `updated` older than about three hours; the worker is unavailable. A
   stale `waiting for user` status means "reservation released", not "failed".
+- **Quota block**: a status with `state: blocked` whose `blockers` value starts with
+  `quota:` records a provider usage limit, for example
+  `quota: claude (claude-opus-5-5), resets 2026-10-19 21:10 Europe/Budapest (reported)` or
+  `quota: codex (gpt-5), reset unknown`. While the reported reset time has not passed, or for
+  24 hours after `updated` when the reset is unknown, the worker is waiting, not stale. A
+  locally configured cap (for example Copilot `--max-ai-credits`) is not provider quota and
+  uses a different blocker prefix, `cap:`.
 - A status `state` that disagrees with the plan row is a conflict to report, not to
   auto-resolve: the plan is authoritative for assignment, the status for the worker's
   progress.
