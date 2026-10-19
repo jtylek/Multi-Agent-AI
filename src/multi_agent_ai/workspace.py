@@ -5,8 +5,8 @@ Git is the source of truth; ``tasks/<task-id>/workspaces.json`` is a derived rec
 here. Conventions (decisions.md D16): branches ``task/<task-id>/integration`` and
 ``task/<task-id>/<subtask-id>``; worktrees at ``<worktrees-root>/<project>-<subtask-id>`` outside
 the project and state root (default root: ``..\\wt`` next to the project). The module never pushes,
-never touches the primary checkout, never deletes a branch it did not create in a failed call,
-and never uses ``--force`` except to roll back a half-made worktree of its own.
+never touches the primary checkout, never deletes a branch (not even to undo a failed call),
+and uses ``--force`` only to remove a half-made worktree of its own after a failed create.
 Worktrees are edit isolation, not a security boundary.
 
 Every mutating function takes ``execute``; with ``execute=False`` it performs every check and
@@ -308,9 +308,13 @@ def _create(project_root: Path, state: StateRoot, task_id: str, name: str, branc
     if existing:
         listed = [b for b in _worktree_list(project_root) if b.get("branch") == f"refs/heads/{branch}"]
         if allow_reuse and existing == sha and not listed:
-            reused = True
+            reused = True  # leftover of an earlier failed attempt, or the branch was made by hand at the base
         else:
-            raise WorkspaceError("branch_exists", f"branch {branch} already exists at {existing[:7]}")
+            where = "has a worktree" if listed else f"is at {existing[:7]}, not the expected base {sha[:7]}"
+            raise WorkspaceError(
+                "branch_exists", f"branch {branch} already exists and {where}. The manager never deletes branches; "
+                f"if it is a leftover you do not need, run this yourself and retry: git -C \"{project_root}\" "
+                f"branch -D {branch}")
     _check_path(path, project_root, state.path)
     record = WorktreeRecord(name, branch, str(path), sha, base_from, "created", format_timestamp(), reused)
     if not execute:
@@ -334,7 +338,7 @@ def _create(project_root: Path, state: StateRoot, task_id: str, name: str, branc
             if problems:
                 raise gitops.GitError("; ".join(problems))
         except gitops.GitError as exc:
-            _rollback(project_root, branch, path, created_branch=not reused)
+            _rollback(project_root, path)
             raise WorkspaceError("git_failed", f"could not create {path}: {exc}") from exc
         if _primary_state(project_root) != primary_before:
             raise WorkspaceError("primary_changed", "the primary checkout changed during the operation")
@@ -343,13 +347,12 @@ def _create(project_root: Path, state: StateRoot, task_id: str, name: str, branc
     return CreateResult(record, True, warnings)
 
 
-def _rollback(project_root: Path, branch: str, path: Path, created_branch: bool) -> None:
-    """Undo only what this call made (the branch and path did not exist before it started)."""
+def _rollback(project_root: Path, path: Path) -> None:
+    """Remove only the half-made worktree of a failed create. The branch is left alone (D17): a
+    retry accepts an existing branch at the expected base that has no worktree."""
     try:
         if any(gitops.same_path(b.get("worktree", ""), path) for b in _worktree_list(project_root)):
             gitops.git(project_root, "worktree", "remove", "--force", str(path))
-        if created_branch and _branch_tip(project_root, branch):
-            gitops.git(project_root, "branch", "-D", branch)
         gitops.git(project_root, "worktree", "prune")
     except gitops.GitError:
         pass
@@ -399,7 +402,7 @@ def create_subtask_worktree(project_root: Path, state: StateRoot, task_id: str, 
         base, label = plan.base_commit, "plan"
     root = worktrees_root or default_worktrees_root(project_root)
     return _create(project_root, state, task_id, subtask_id, branch_name(task_id, subtask_id),
-                   worktree_path(project_root, root, subtask_id), base, label, protected, execute, allow_reuse=False)
+                   worktree_path(project_root, root, subtask_id), base, label, protected, execute, allow_reuse=True)
 
 
 # --- inspection ----------------------------------------------------------------------------------
@@ -629,13 +632,18 @@ def remove_worktree(project_root: Path, state: StateRoot, task_id: str, subtask_
     return RemovalResult(subtask_id, str(path), True, "removed")
 
 
-def retain_failed(state: StateRoot, task_id: str, subtask_id: str, reason: str) -> WorktreeRecord:
-    """Mark a subtask's worktree as kept for diagnosis. Worktree and branch are not touched."""
-    with _Lock(state, task_id, True):
-        records = read_records(state, task_id)
-        rec = records.get(subtask_id)
-        if rec is None:
-            raise WorkspaceError("not_a_worktree", f"{subtask_id} is not in the workspace record")
-        rec.state, rec.note = "retained", " ".join(reason.split())[:300]
-        _write_records(state, task_id, records)
+def retain_failed(state: StateRoot, task_id: str, subtask_id: str, reason: str, execute: bool = False) -> WorktreeRecord:
+    """Mark a subtask's worktree as kept for diagnosis. Worktree and branch are not touched.
+    Without ``execute`` the record is not changed; the returned record shows what it would become."""
+    records = read_records(state, task_id)
+    rec = records.get(subtask_id)
+    if rec is None:
+        raise WorkspaceError("not_a_worktree", f"{subtask_id} is not in the workspace record")
+    rec = WorktreeRecord(**asdict(rec))
+    rec.state, rec.note = "retained", " ".join(reason.split())[:300]
+    if execute:
+        with _Lock(state, task_id, True):
+            records = read_records(state, task_id)
+            records[subtask_id] = rec
+            _write_records(state, task_id, records)
     return rec

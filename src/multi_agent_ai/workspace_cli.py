@@ -14,7 +14,7 @@ from pathlib import Path
 from . import workspace as ws
 from .state import resolve_state_root
 
-MUTATING = ("create-integration", "create", "integrate", "remove")
+MUTATING = ("create-integration", "create", "integrate", "remove", "retain")
 
 
 def add_parser(sub: argparse._SubParsersAction) -> None:
@@ -56,7 +56,7 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     remove.add_argument("--discard-failed", action="store_true",
                         help="USER ONLY: also remove a retained failed worktree (needs --execute)")
     retain = wsub.add_parser("retain", help="mark a failed subtask's worktree as kept for diagnosis")
-    common(retain, mutating=False, subtask=True)
+    common(retain, mutating=True, subtask=True)
     retain.add_argument("--reason", required=True, help="why it is kept (failure class, run directory)")
 
 
@@ -117,8 +117,9 @@ def main(args: argparse.Namespace) -> int:
             r = ws.remove_worktree(project, root, args.task, args.subtask, execute, args.discard_failed)
             emit(r, f"{'removed' if r.executed else 'would remove'} {r.path}")
         elif command == "retain":
-            record = ws.retain_failed(root, args.task, args.subtask, args.reason)
-            emit(record, f"retained {record.branch} at {record.path}: {record.note}")
+            record = ws.retain_failed(root, args.task, args.subtask, args.reason, execute)
+            verb = "retained" if execute else "would retain"
+            emit(record, f"{verb} {record.branch} at {record.path}: {record.note}")
     except ws.WorkspaceError as exc:
         print(f"{exc.code}: {exc.message}", file=sys.stderr)
         for detail in exc.details:

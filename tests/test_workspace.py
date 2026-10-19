@@ -46,12 +46,18 @@ def only_tmp_git(monkeypatch, tmp_path):
     """Fail any Git call whose working directory is outside tmp_path."""
     real = gitops.git
     root = tmp_path.resolve()
+    calls = []
 
     def guarded(cwd, *args, **kw):
         assert Path(cwd).resolve().is_relative_to(root), f"git {args} ran outside tmp_path: {cwd}"
+        calls.append(args)
         return real(cwd, *args, **kw)
 
     monkeypatch.setattr(gitops, "git", guarded)
+    yield
+    # D17: the manager never deletes a branch, whatever the test did
+    deletes = [a for a in calls if a[:1] == ("branch",) and any(x in ("-d", "-D", "--delete") for x in a)]
+    assert not deletes, f"the manager deleted a branch: {deletes}"
 
 
 class Ctx:
@@ -176,8 +182,14 @@ def test_reserved_and_unknown_subtask_ids(ctx):
 
 
 def test_existing_branch_or_path_is_refused(ctx):
-    git(ctx.project, "branch", f"task/{TASK}/A")
-    assert code_of(lambda: ctx.subtask("A")) == "branch_exists"
+    (ctx.project / "other.txt").write_text("x", encoding="utf-8")
+    git(ctx.project, "add", "-A")
+    git(ctx.project, "commit", "-q", "-m", "elsewhere")
+    git(ctx.project, "branch", f"task/{TASK}/A")  # at a commit that is not the plan's base
+    with pytest.raises(ws.WorkspaceError) as caught:
+        ctx.subtask("A")
+    assert caught.value.code == "branch_exists" and f"branch -D task/{TASK}/A" in str(caught.value)
+    git(ctx.project, "reset", "-q", "--hard", ctx.base)
     (ctx.wt_root / "My Project-C").mkdir(parents=True)
     assert code_of(lambda: ctx.subtask("C")) == "worktree_exists"
 
@@ -194,7 +206,7 @@ def test_worktree_path_policy(ctx, make_root, code):
                                                       execute=True)) == code
 
 
-def test_failure_after_worktree_add_rolls_back_only_what_was_made(ctx, monkeypatch):
+def test_failure_after_worktree_add_removes_only_the_worktree_and_a_retry_succeeds(ctx, monkeypatch):
     real = gitops.worktree_info
 
     def boom(path):
@@ -204,11 +216,32 @@ def test_failure_after_worktree_add_rolls_back_only_what_was_made(ctx, monkeypat
 
     monkeypatch.setattr(gitops, "worktree_info", boom)
     assert code_of(lambda: ctx.subtask("A")) == "git_failed"
-    monkeypatch.undo()
+    monkeypatch.setattr(gitops, "worktree_info", real)
     assert not (ctx.wt_root / "My Project-A").exists()
-    assert git(ctx.project, "branch", "--list", f"task/{TASK}/A") == ""
+    assert git(ctx.project, "branch", "--list", f"task/{TASK}/A").strip() != ""  # D17: the branch is kept
     assert "A" not in ws.read_records(ctx.state, TASK)
     assert len(git(ctx.project, "worktree", "list").splitlines()) == 1
+    retry = ctx.subtask("A")  # the leftover branch is at the expected base and has no worktree
+    assert retry.executed and retry.record.reused
+    path = Path(retry.record.path)
+    info = gitops.worktree_info(path)
+    assert info.branch == f"task/{TASK}/A" and info.head == ctx.base and not gitops.snapshot(path).status
+
+
+def test_branch_with_a_worktree_is_not_reused(ctx):
+    ctx.subtask("A")
+    with pytest.raises(ws.WorkspaceError) as caught:
+        ctx.subtask("A")
+    assert caught.value.code == "branch_exists" and "has a worktree" in caught.value.message
+
+
+def test_the_module_never_issues_a_branch_delete():
+    import re
+
+    pattern = re.compile(r"""["']branch["']\s*,[^)\n]*["'](?:-d|-D|--delete)["']""")
+    for name in ("workspace.py", "workspace_cli.py"):
+        source = (Path(ws.__file__).parent / name).read_text(encoding="utf-8")
+        assert not pattern.findall(source), name
 
 
 def test_primary_checkout_is_untouched_by_creation(ctx):
@@ -400,7 +433,7 @@ def test_retained_failed_worktree_is_kept_unless_the_user_discards(ctx):
     make_three(ctx)
     c_path = Path(ws.read_records(ctx.state, TASK)["C"].path)
     head_before = git(c_path, "rev-parse", "HEAD")
-    record = ws.retain_failed(ctx.state, TASK, "C", "timeout; runs/20261020-x")
+    record = ws.retain_failed(ctx.state, TASK, "C", "timeout; runs/20261020-x", execute=True)
     assert record.state == "retained" and "timeout" in record.note
     assert git(c_path, "rev-parse", "HEAD") == head_before and c_path.is_dir()
     assert code_of(lambda: ws.remove_worktree(ctx.project, ctx.state, TASK, "C", execute=True)) == "unsafe_remove"
@@ -408,7 +441,7 @@ def test_retained_failed_worktree_is_kept_unless_the_user_discards(ctx):
     assert not dry.executed and c_path.is_dir()
     ws.remove_worktree(ctx.project, ctx.state, TASK, "C", execute=True, discard_failed=True)
     assert not c_path.exists() and git(ctx.project, "branch", "--list", f"task/{TASK}/C").strip() != ""
-    assert code_of(lambda: ws.retain_failed(ctx.state, TASK, "nope", "x")) == "not_a_worktree"
+    assert code_of(lambda: ws.retain_failed(ctx.state, TASK, "nope", "x", execute=True)) == "not_a_worktree"
 
 
 # --- CLI ------------------------------------------------------------------------------------------
@@ -450,5 +483,8 @@ def test_cli_integrate_and_remove_end_to_end(ctx, capsys):
     assert "integration tip" in capsys.readouterr().out
     assert run_cli(ctx, "remove", "--subtask", "A") == 0 and Path(ws.read_records(ctx.state, TASK)["A"].path).is_dir()
     assert run_cli(ctx, "remove", "--subtask", "A", "--execute") == 0
-    assert run_cli(ctx, "retain", "--subtask", "C", "--reason", "kept") == 0
+    assert run_cli(ctx, "retain", "--subtask", "C", "--reason", "kept") == 0  # dry run
+    assert ws.read_records(ctx.state, TASK)["C"].state != "retained"
+    assert run_cli(ctx, "retain", "--subtask", "C", "--reason", "kept", "--execute") == 0
+    assert ws.read_records(ctx.state, TASK)["C"].state == "retained"
     assert run_cli(ctx, "check", "--json") in (0, 1)
