@@ -12,6 +12,10 @@ COMMAND = winproc.ResolvedCommand("codex", Path("codex.exe"), "exe", ("codex.exe
 
 @pytest.mark.parametrize("text, expected", [
     ("codex-cli 0.163.0", "0.163.0"),
+    # real outputs captured once by the coordinator (no model call)
+    ("codex-cli 0.163.0\n", "0.163.0"),
+    ("GitHub Copilot CLI 1.0.98.\nRun 'copilot update' to check for updates.\n", "1.0.98"),
+    ("2.1.301 (Claude Code)\n", "2.1.301"),
     ("GitHub Copilot CLI 1.0.4.", "1.0.4"),
     ("1.2.3 (Claude Code)", "1.2.3"),
     ("v2.10.0-beta.1", "2.10.0-beta.1"),
@@ -22,6 +26,12 @@ COMMAND = winproc.ResolvedCommand("codex", Path("codex.exe"), "exe", ("codex.exe
 ])
 def test_parse_version(text, expected):
     assert parse_version(text) == expected
+
+
+def test_copilot_two_line_output_end_to_end():
+    copilot = "GitHub Copilot CLI 1.0.98." + chr(10) + "Run 'copilot update' to check for updates." + chr(10)
+    result = read_cli_version(COMMAND, {}, runner=fake_runner(copilot))
+    assert result.version == "1.0.98" and result.error is None and "copilot update" in result.raw
 
 
 def fake_runner(stdout="", stderr="", exit_code=0, timed_out=False, launch_error=None, seen=None):

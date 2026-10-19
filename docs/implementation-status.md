@@ -71,7 +71,11 @@ listed below is planned, not implemented.
   closed stdin, process-tree kill, same allowlisted environment), run once per `worker run
   --execute` after the command is resolved; the parsed `x.y.z` and the raw text are recorded in
   `result.json` (`cli_version`) and the SQLite attempt details; a failed or unparseable probe is
-  recorded as unknown and never blocks the run; a dry run does not probe. Tested only with fake executables; **no real provider run has been
+  recorded as unknown and never blocks the run; a dry run does not probe. The parser takes the
+  first `x.y.z` and tolerates a trailing period and extra lines (real outputs: `codex-cli 0.163.0`;
+  `GitHub Copilot CLI 1.0.98.` followed by `Run 'copilot update' to check for updates.`;
+  `2.1.301 (Claude Code)`). That Copilot line suggests the CLI may check for updates, which is
+  network traffic but not model quota. Tested only with fake executables; **no real provider run has been
   made yet** (planned after integration, with the user's OK).
 - Tests in `tests/` cover every valid and invalid example in formats.md, plus the D8 rule
   that exit codes and notification transport never create an ack or a completion.
