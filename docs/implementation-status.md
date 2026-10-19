@@ -39,12 +39,12 @@ listed below is planned, not implemented.
 - Notification transport (`notify.py` and `notify`): dry-run by default; with explicit `--send`,
   sends mailbox pointers through configured Codex/Copilot contacts and reports Claude/manual relay
   targets. Transport is never an ack.
-  - `worker run --provider codex|copilot --task T --subtask S --agent-id ID --mode
-    review|implement --worktree ABS [--model M] [--timeout S] [--commit SHA]
-    [--verify-command C] [--live-branch B]... [--pass-env NAME]...`: one managed headless
-    worker attempt (T12; see "Managed workers" in
-    [protocol/agent-messaging.md](protocol/agent-messaging.md)). Exit 0 on success, 1 on a
-    classified failure, 2 when rejected before an attempt exists.
+- CLI `worker run --provider codex|copilot --task T --subtask S --agent-id ID --mode
+  review|implement --worktree ABS [--model M] [--timeout S] [--commit SHA]
+  [--verify-command C] [--live-branch B]... [--pass-env NAME]...`: one managed headless
+  worker attempt (T12; see "Managed workers" in
+  [protocol/agent-messaging.md](protocol/agent-messaging.md)). Exit 0 on success, 1 on a
+  classified failure, 2 when rejected before an attempt exists.
 - Windows process runtime (`winproc.py`): executable resolution (`.exe` > `.cmd`/`.bat`, never
   `.ps1`; npm shims run as `node.exe <script>`), argv without a shell, refusal of arguments
   `cmd.exe` would alter, stdout/stderr streamed to files, timeout with process-tree kill via a
