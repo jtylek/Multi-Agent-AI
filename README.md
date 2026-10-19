@@ -125,6 +125,30 @@ The source protocol also defines bounded response watches, cleanup ownership, an
 
 Windows implementation must correctly resolve `.exe`, `.cmd`, and `.bat` entrypoints, manage process trees, stream logs, tolerate UTF-8 BOMs, and classify configuration/authentication failures without blindly retrying. Git worktrees provide editing isolation **but are not a security boundary**.
 
+## Current implementation
+
+The first package (milestone M0) implements the protocol/state foundation only: typed models,
+a parser and writer for the coordination files in [docs/protocol/formats.md](docs/protocol/formats.md),
+a configurable state root with a derived SQLite index, and a small CLI. It needs Python 3.11+
+and uses only the standard library at runtime. Agent execution, provider adapters, routing,
+the registry and the VS Code integration are not implemented yet; see
+[docs/implementation-status.md](docs/implementation-status.md).
+
+```powershell
+py -3.12 -m venv .venv
+.venv\Scripts\python -m pip install -e .[dev]
+.venv\Scripts\python -m pytest -q
+
+.venv\Scripts\multi-agent-ai init --project-root <target-project>
+.venv\Scripts\multi-agent-ai inspect --project-root <target-project>
+```
+
+The state root defaults to `.multi-agent-ai/` in the target project's primary checkout; pass
+`--state-root <path>` (absolute, or relative to the project root) to use another location.
+SQLite lives at `<state-root>/state.sqlite3` and is only an index of the coordination files,
+which remain the source of truth. `inspect` is read-only. `init` does not edit the target
+project's `.gitignore`; exclude the state root from version control yourself.
+
 ## Proposed milestones
 
 - **M0 — Bootstrap:** README, protocol documentation, architecture decisions, initial tests and project layout.
