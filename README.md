@@ -178,8 +178,9 @@ cd ..
 .venv\Scripts\multi-agent-ai init --project-root demo
 ```
 
-This creates `demo\.multi-agent-ai\` (messages, tasks and a SQLite index). Keep that folder out
-of Git, for example by adding it to `demo\.gitignore`.
+This creates `demo\.multi-agent-ai\` (messages, tasks, a SQLite index, and a starter
+`project-profile.toml`). Keep that folder out of Git, for example by adding it to
+`demo\.gitignore`; the starter profile is a placeholder and the engine does not read it yet.
 
 **4. Write a tiny plan.** Save the following as `demo\.multi-agent-ai\tasks\demo\plan.md`
 (create the `tasks\demo` folders). The table is what the tool reads; the file formats are in

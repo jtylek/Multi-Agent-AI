@@ -28,8 +28,11 @@ listed below is planned, not implemented.
   the highest plan revision seen per task, and operational records. It never stores or infers
   an acknowledgment.
 - CLI `multi-agent-ai` / `python -m multi_agent_ai`:
-  - `init [--project-root P] [--state-root S]`: creates `messages/`, `tasks/`, `registry/`, `config.json`
-    and the index; never touches existing coordination files or `.gitignore`.
+  - `init [--project-root P] [--state-root S]`: creates `messages/`, `tasks/`, `registry/`,
+    `config.json`, the index, and a non-overwriting starter `project-profile.toml` in the state
+    root; the profile path is included in the init JSON output. The profile is a project-neutral
+    TOML placeholder and the engine does not read, validate, or enforce it yet. It never touches
+    existing coordination files or `.gitignore`.
   - `inspect [--state-root S] [--json] [--now "YYYY-MM-DD HH:MM"]`: read-only report of
     messages with per-recipient ack state, tasks with plan revision and subtask states, and
     staleness/conflict findings. It creates no file; an existing index is opened read-only.
