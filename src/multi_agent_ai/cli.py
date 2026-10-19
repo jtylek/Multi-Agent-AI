@@ -1,4 +1,4 @@
-"""Command line: ``multi-agent-ai init | inspect | index`` (also ``python -m multi_agent_ai``)."""
+"""Command line: ``multi-agent-ai init | inspect | index | worker run`` (also ``python -m multi_agent_ai``)."""
 
 from __future__ import annotations
 
@@ -47,6 +47,7 @@ def _parser() -> argparse.ArgumentParser:
             cmd.add_argument("--send", action="store_true", help="send notifications (default is dry-run)")
         if name == "inspect":
             cmd.add_argument("--now", help="evaluate staleness at this local time (YYYY-MM-DD HH:MM)")
+    _add_worker_parser(sub)
     return parser
 
 
@@ -54,6 +55,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="backslashreplace")
     args = _parser().parse_args(argv)
+    if args.command == "worker":  # T12 block: see _add_worker_parser / _worker_main below
+        return _worker_main(args)
     project_root = resolve_state_root(args.project_root).path.parent
 
     if args.command == "agents":
@@ -68,7 +71,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"error\t{error}", file=sys.stderr)
         return 0 if result.agents or not result.errors else 1
 
-    root = resolve_state_root(args.project_root, args.state_root)
+    root =resolve_state_root(args.project_root, args.state_root)
 
     if args.command == "init":
         root = init_state_root(args.project_root, args.state_root)
@@ -132,3 +135,69 @@ def main(argv: Sequence[str] | None = None) -> int:
         changed = index.reindex(entries, revisions)
     print(f"indexed {len(entries)} file(s), {len(changed)} new or changed")
     return 0
+
+
+# --- worker block (T12: managed headless workers) -----------------------------------------
+# Kept in one block so it can be merged with other subcommand blocks at integration.
+
+
+def _add_worker_parser(sub: argparse._SubParsersAction) -> None:
+    from .workers.runner import DEFAULT_TIMEOUT
+
+    worker = sub.add_parser("worker", help="managed headless workers (codex exec, copilot -p)")
+    worker_sub = worker.add_subparsers(dest="worker_command", required=True)
+    help_text = ("run one managed worker attempt: build the prompt from plan.md, launch the provider "
+                 "with a least-privilege profile, check the worktree, record the attempt (no retries)")
+    run = worker_sub.add_parser("run", help=help_text, description=help_text)
+    run.add_argument("--provider", required=True, choices=("codex", "copilot"))
+    run.add_argument("--task", required=True, help="task id (tasks/<task-id>/plan.md)")
+    run.add_argument("--subtask", required=True, help="subtask id from the plan's subtask table")
+    run.add_argument("--agent-id", required=True, help="new managed-worker id, e.g. codex-w1 (never an existing chat's id)")
+    run.add_argument("--mode", required=True, choices=("review", "implement"))
+    run.add_argument("--worktree", required=True, help="absolute path of the worker's Git worktree")
+    run.add_argument("--model", default=None, help="provider model (default: the provider's own default)")
+    run.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help="seconds before the process tree is killed")
+    run.add_argument("--commit", default=None, help="review mode: SHA of the commit to review (default: worktree HEAD)")
+    run.add_argument("--verify-command", default=None,
+                     help="verification command (default: taken from plan.md); Copilot allows exactly shell(<command>)")
+    run.add_argument("--live-branch", action="append", default=[],
+                     help="extra live/protected branch implement mode refuses (main and master always are)")
+    run.add_argument("--pass-env", action="append", default=[],
+                     help="pass this environment variable to the worker in addition to the allowlist (e.g. an API key)")
+    run.add_argument("--project-root", default=".", help="primary checkout (default: current directory)")
+    run.add_argument("--state-root", default=None,
+                     help="state root, absolute or relative to the project root (default: .multi-agent-ai)")
+
+
+def _worker_main(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from .workers.runner import UsageError, WorkerRequest, run_worker
+
+    root = resolve_state_root(args.project_root, args.state_root)
+    if not root.path.is_dir():
+        print(f"state root not found: {root.path} (run 'multi-agent-ai init' or pass --state-root)", file=sys.stderr)
+        return 2
+    request = WorkerRequest(
+        provider=args.provider, task_id=args.task, subtask_id=args.subtask, agent_id=args.agent_id,
+        mode=args.mode, worktree=Path(args.worktree), project_root=Path(args.project_root).resolve(),
+        state_root=root, model=args.model, timeout=args.timeout, commit=args.commit,
+        live_branches=tuple(args.live_branch), pass_env=tuple(args.pass_env), verify_command=args.verify_command,
+    )
+    try:
+        outcome = run_worker(request)
+    except UsageError as exc:
+        print(f"worker run rejected: {exc}", file=sys.stderr)
+        return 2
+    summary = {
+        "attempt": outcome.attempt_id, "failure_class": outcome.failure_class,
+        "failure_detail": outcome.result.get("failure_detail"), "exit_code": outcome.exit_code,
+        "run_dir": str(outcome.run_dir), "commit_created": outcome.commit,
+        "status_file": str(outcome.status_path) if outcome.status_path else None,
+        "review_file": str(outcome.review_path) if outcome.review_path else None,
+    }
+    print(json.dumps(summary, indent=2, ensure_ascii=False))
+    return 0 if outcome.ok else 1
+
+
+# --- end of worker block ---------------------------------------------------------------------

@@ -145,6 +145,46 @@ def test_operational_records_round_trip(tmp_path):
         Job("../x", "goal", "lead")
 
 
+def test_open_failure_closes_the_connection(tmp_path):
+    """A corrupt index raises, and the file handle is released (T14).
+
+    On Windows an open SQLite handle blocks deleting the file, so deleting it proves the
+    connection was closed. Without the fix `unlink` raises PermissionError.
+    """
+    import sqlite3
+
+    broken = tmp_path / "state.sqlite3"
+    broken.write_bytes(b"this is not a sqlite database at all" * 10)
+    with pytest.raises(sqlite3.DatabaseError):
+        StateIndex.open(broken)
+    broken.unlink()
+    assert not broken.exists()
+
+
+def test_open_failure_closes_the_connection_with_a_failing_schema(tmp_path, monkeypatch):
+    import sqlite3
+
+    closed = []
+    real_connect = sqlite3.connect
+
+    class Spy:
+        def __init__(self, connection):
+            self._connection = connection
+
+        def executescript(self, script):
+            raise sqlite3.OperationalError("database is locked")
+
+        def close(self):
+            closed.append(True)
+            self._connection.close()
+
+    monkeypatch.setattr("multi_agent_ai.state.sqlite3.connect", lambda *a, **k: Spy(real_connect(*a, **k)))
+    with pytest.raises(sqlite3.OperationalError):
+        StateIndex.open(tmp_path / "state.sqlite3")
+    assert closed == [True]
+    (tmp_path / "state.sqlite3").unlink()
+
+
 def test_d8_exit_code_and_transport_never_create_ack_or_completion(board):
     """A zero exit code or a successful notification is not an ack or a completion (D8)."""
     message_dir = board / "messages" / "m1"
