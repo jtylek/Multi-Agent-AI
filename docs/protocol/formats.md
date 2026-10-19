@@ -295,6 +295,9 @@ verify: T1: `python -m pytest tests/test_add.py -q`
 verify: T2: `python -m pytest tests/test_divide.py -q`
 ```
 
+An entry may optionally be a Markdown list item (`- verify: ...`, `* verify: ...`, or
+`1. verify: ...`).
+
 The command is the inline-code span on the matching `verify: <subtask-id>:` line. The
 orchestrator passes the command to shell-free verification as an argv declaration; it must not
 interpret the line as a shell script. For backwards compatibility, a plan with one subtask and

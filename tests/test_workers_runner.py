@@ -73,6 +73,8 @@ Ship the widget.
 1. Widget renders.
 2. Verification command (exact): `python -m pytest -q`.
 
+verify: T1: `python -m pytest -q`
+
 ## Subtasks
 
 """ + render_subtask_table((
@@ -588,9 +590,11 @@ def test_copilot_unconfigured_profile_never_launches(env):
     write_plan(env.root.path, Plan("demo", "lead", 4, "2026-10-19 11:00", body=plan_without_command,
                                    base_commit=env.base[:7], integration_branch="task/demo/integration"),
                author="lead")
-    outcome = env.run(provider="copilot", agent_id="copilot-w1")
-    assert outcome.failure_class == fc.PROFILE_UNCONFIGURED and not env.launched()
-    assert "--verify-command" in outcome.result["failure_detail"]
+    with pytest.raises(UsageError, match="no 'verify: T1:' entry"):
+        env.run(provider="copilot", agent_id="copilot-w1")
+    assert not env.launched()
+    with pytest.raises(UsageError, match="no 'verify: T1:' entry"):
+        preview_worker(env.request(provider="copilot", agent_id="copilot-w1"))
 
 
 def test_copilot_review_end_to_end_with_awkward_prompt(env):

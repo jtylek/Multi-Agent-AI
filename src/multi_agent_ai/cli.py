@@ -8,7 +8,7 @@ import sys
 from datetime import datetime
 from typing import Sequence
 
-from .board import check_revision_progress
+from .board import check_revision_progress, read_plan
 from .grammar import parse_timestamp
 from .notify import format_notify, notify_message
 from .reachability import discover_agents
@@ -62,8 +62,10 @@ def _parser() -> argparse.ArgumentParser:
     doctor.add_argument("--json", action="store_true", help="machine-readable output")
     verify = sub.add_parser("verify", help="independently verify a worktree using declared argv commands")
     verify.add_argument("--worktree", required=True, help="Git worktree to verify")
-    verify.add_argument("--command", action="append", nargs="+", required=True,
+    verify.add_argument("--command", dest="verify_commands", action="append", nargs="+", default=None,
                         help="one shell-free argv command; repeat for multiple commands")
+    verify.add_argument("--task", default=None, help="task id whose plan declares verify: <subtask>:")
+    verify.add_argument("--subtask", default=None, help="subtask id for --task plan verification")
     verify.add_argument("--preflight", action="append", nargs="+", default=[],
                         help="preflight argv command; failure is environment_error")
     verify.add_argument("--expected-file", action="append", default=[], help="file expected in the worktree")
@@ -103,13 +105,29 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         from .verify import CommandSpec, VerificationSpec, verify
 
-        spec = VerificationSpec(
-            commands=tuple(CommandSpec(tuple(command)) for command in args.command),
-            preflight=tuple(CommandSpec(tuple(command)) for command in args.preflight),
-            expected_files=tuple(args.expected_file), expected_clean=args.expected_clean,
-            expected_commit=args.expected_commit, timeout=args.timeout, environment=tuple(args.env),
-        )
         root = resolve_state_root(args.project_root, args.state_root)
+        from .verify import CommandSpec, VerificationSpec, parse_command, verify
+
+        try:
+            if args.verify_commands:
+                commands = tuple(CommandSpec(tuple(command)) for command in args.verify_commands)
+            elif args.task and args.subtask:
+                plan_result = read_plan(root.tasks / args.task)
+                if plan_result.value is None:
+                    raise ValueError(f"task plan {args.task!r} is not usable")
+                from .workers.prompt import verification_command
+                commands = (CommandSpec(parse_command(verification_command(plan_result.value, args.subtask))),)
+            else:
+                raise ValueError("provide --command or both --task and --subtask")
+            spec = VerificationSpec(
+                commands=commands,
+                preflight=tuple(CommandSpec(tuple(command)) for command in args.preflight),
+                expected_files=tuple(args.expected_file), expected_clean=args.expected_clean,
+                expected_commit=args.expected_commit, timeout=args.timeout, environment=tuple(args.env),
+            )
+        except ValueError as exc:
+            print(f"verify: {exc}", file=sys.stderr)
+            return 2
         result = verify(Path(args.worktree), spec, run_dir=args.run_dir or root.path / "runs" / "verify" / "cli")
         if args.json:
             print(json.dumps(result.as_dict(), indent=2, ensure_ascii=False))
@@ -117,6 +135,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"{result.status}: {result.run_dir} ({result.duration_seconds:.3f}s)")
             if result.error:
                 print(result.error, file=sys.stderr)
+            for item in result.commands:
+                if item.status != "passed":
+                    print(f"failed command: {' '.join(item.argv)}; logs: {item.stdout_file}, {item.stderr_file}", file=sys.stderr)
         return 0 if result.ok else 1
     if args.command == "worker":  # T12 block: see _add_worker_parser / _worker_main below
         return _worker_main(args)

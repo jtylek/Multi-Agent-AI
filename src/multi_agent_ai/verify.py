@@ -8,6 +8,11 @@ directory, and distinguishes launch/preflight problems from verification failure
 from __future__ import annotations
 
 import json
+import os
+import re
+import shlex
+import tempfile
+import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -84,13 +89,16 @@ def _command(value: CommandSpec | Sequence[str]) -> CommandSpec:
 
 
 def _run_dir(root: Path, supplied: Path | None) -> Path:
-    path = supplied or root / ".multi-agent-ai" / "runs" / "verify" / f"{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:8]}"
+    path = supplied or Path(tempfile.gettempdir()) / "multi-agent-ai" / "runs" / "verify" / f"{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:8]}"
     path.mkdir(parents=True, exist_ok=True)
     return path.resolve()
 
 
 def _env(extra: Iterable[str], overrides: Mapping[str, str] | None) -> dict[str, str]:
-    return winproc.build_env(extra_names=extra, overrides=overrides)
+    base = dict(os.environ)
+    if overrides:
+        base.update(overrides)
+    return winproc.build_env(base, extra_names=extra)
 
 
 def _execute(
@@ -106,7 +114,7 @@ def _execute(
     stdout = run_dir / f"{index:03d}-stdout.log"
     stderr = run_dir / f"{index:03d}-stderr.log"
     try:
-        command = winproc.resolve_command(spec.argv[0], env=env)
+        command = _resolve_command(spec.argv[0], cwd, env)
     except (OSError, ValueError) as exc:
         stdout.touch()
         stderr.touch()
@@ -133,6 +141,53 @@ def _git_command(cwd: Path, args: Sequence[str], env: Mapping[str, str], run_dir
     return result, output.strip()
 
 
+def _resolve_command(name: str, cwd: Path, env: Mapping[str, str]) -> winproc.ResolvedCommand:
+    """Resolve relative executables from the verified worktree before PATH."""
+    candidate = Path(name)
+    if not candidate.is_absolute() and ("\\" in name or "/" in name or candidate.suffix == ""):
+        local = cwd / candidate
+        if local.is_file():
+            return winproc.resolve_command(str(local), env=env)
+        if not local.suffix and local.with_suffix(".exe").is_file():
+            return winproc.resolve_command(str(local.with_suffix(".exe")), env=env)
+    return winproc.resolve_command(name, env=env)
+
+
+def parse_command(text: str) -> tuple[str, ...]:
+    """Parse a plan command as Windows argv, rejecting shell syntax."""
+    if not text.strip():
+        raise ValueError("verification command is empty")
+    if re.search(r"[|&<>;]", text) or re.search(r"%[^%\r\n]+%", text):
+        raise ValueError("verification command contains shell syntax; declare argv without |, &, >, <, ;, or %VAR%")
+    try:
+        parts = shlex.split(text, posix=False)
+    except ValueError as exc:
+        raise ValueError(f"invalid Windows verification argv: {exc}") from exc
+    cleaned = tuple(part[1:-1] if len(part) >= 2 and part[0] == part[-1] and part[0] in "\"'" else part for part in parts)
+    if not cleaned:
+        raise ValueError("verification command is empty")
+    return cleaned
+
+
+def _inside(child: Path, parent: Path) -> bool:
+    try:
+        child.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _validate_spec(cwd: Path, spec: VerificationSpec) -> None:
+    if spec.expected_commit == "":
+        raise ValueError("expected_commit must be a 7-40 character hexadecimal SHA")
+    if spec.expected_commit is not None and not re.fullmatch(r"[0-9a-fA-F]{7,40}", spec.expected_commit):
+        raise ValueError("expected_commit must be a 7-40 character hexadecimal SHA")
+    for value in spec.expected_files:
+        path = (cwd / value).resolve() if not Path(value).is_absolute() else Path(value).resolve()
+        if not _inside(path, cwd):
+            raise ValueError(f"expected file must be inside the worktree: {value}")
+
+
 def verify(
     worktree: Path | str,
     spec: VerificationSpec,
@@ -147,63 +202,80 @@ def verify(
     ``verification_failed``.  An empty command list is not a successful verification.
     """
     cwd = Path(worktree).resolve()
+    _validate_spec(cwd, spec)
     started = datetime.now()
     directory = _run_dir(cwd, Path(run_dir) if run_dir is not None else None)
     env = _env(spec.environment, environment)
-    result = VerificationResult("verification_failed", started.isoformat(), started.isoformat(), 0.0, str(directory), expected_commit=spec.expected_commit)
-    clock = __import__("time").monotonic()
+    result = VerificationResult(VERIFICATION_FAILED, started.isoformat(), started.isoformat(), 0.0,
+                                str(directory), expected_commit=spec.expected_commit)
+    clock = time.monotonic()
+    index = 0
     if not cwd.is_dir():
         result.status, result.error = ENVIRONMENT_ERROR, f"worktree does not exist: {cwd}"
     elif not (cwd / ".git").exists():
         result.status, result.error = ENVIRONMENT_ERROR, f"not a Git worktree: {cwd}"
-    elif not spec.commands:
+    elif not spec.commands and result.error is None:
         result.error = "no verification commands declared"
-    else:
-        index = 0
+    elif result.error is None:
         for command in spec.preflight:
-            item = _execute(_command(command), cwd=cwd, env=env, run_dir=directory, index=index, default_timeout=spec.timeout, preflight=True)
+            item = _execute(_command(command), cwd=cwd, env=env, run_dir=directory, index=index,
+                            default_timeout=spec.timeout, preflight=True)
             index += 1
             result.commands.append(item)
             if item.status != "passed":
                 result.status, result.error = ENVIRONMENT_ERROR, "preflight command failed"
                 break
-        if result.status != "environment_error":
+        if result.error is None:
             for command in spec.commands:
-                item = _execute(_command(command), cwd=cwd, env=env, run_dir=directory, index=index, default_timeout=spec.timeout)
+                item = _execute(_command(command), cwd=cwd, env=env, run_dir=directory, index=index,
+                                default_timeout=spec.timeout)
                 index += 1
                 result.commands.append(item)
                 if item.status != "passed":
                     result.status = ENVIRONMENT_ERROR if item.status == ENVIRONMENT_ERROR else VERIFICATION_FAILED
                     result.error = item.error or "verification command failed"
                     break
-            if result.commands and all(item.status == "passed" for item in result.commands) and not result.error:
-                for relative in spec.expected_files:
-                    if not (cwd / relative).is_file():
-                        result.missing_files.append(relative)
-                status, output = _git_command(cwd, ("status", "--porcelain"), env, directory, index)
-                index += 1
-                result.commands.append(status)
-                if status.status == "environment_error":
-                    result.status, result.error = ENVIRONMENT_ERROR, "Git preflight failed"
-                else:
-                    result.dirty = bool(output)
-                    if spec.expected_clean is True and result.dirty:
-                        result.error = "expected clean state" if spec.expected_clean else "expected dirty state"
-                    elif spec.expected_clean is False and not result.dirty:
-                        result.error = "expected dirty state"
-                    head, commit = _git_command(cwd, ("rev-parse", "HEAD"), env, directory, index)
-                    result.commands.append(head)
-                    result.commit = commit or None
-                    if head.status == "environment_error":
-                        result.status, result.error = ENVIRONMENT_ERROR, "Git commit check failed"
-                    elif spec.expected_commit and not (commit == spec.expected_commit or commit.startswith(spec.expected_commit)):
-                        result.error = f"expected commit {spec.expected_commit}, got {commit}"
-                if result.missing_files:
-                    result.error = "expected files missing"
-                if not result.error:
-                    result.status = "passed"
+
+    # Always capture repository evidence, including after command/preflight failure.
+    if cwd.is_dir() and (cwd / ".git").exists():
+        status, output = _git_command(cwd, ("status", "--porcelain"), env, directory, index)
+        index += 1
+        result.commands.append(status)
+        if status.status == ENVIRONMENT_ERROR:
+            result.status, result.error = ENVIRONMENT_ERROR, result.error or "Git status check failed"
+        else:
+            relative_run = None
+            if _inside(directory, cwd):
+                relative_run = directory.relative_to(cwd).as_posix().rstrip("/")
+            lines = []
+            for line in output.splitlines():
+                path_text = line[3:].strip().split(" -> ", 1)[-1] if len(line) > 3 else ""
+                if not relative_run or not (path_text == relative_run or path_text.startswith(relative_run + "/")):
+                    lines.append(line)
+            result.dirty = bool(lines)
+        head, commit = _git_command(cwd, ("rev-parse", "HEAD"), env, directory, index)
+        result.commands.append(head)
+        result.commit = commit or None
+        if head.status == ENVIRONMENT_ERROR:
+            result.status, result.error = ENVIRONMENT_ERROR, result.error or "Git HEAD check failed"
+
+    if result.error is None:
+        for relative in spec.expected_files:
+            path = (cwd / relative).resolve() if not Path(relative).is_absolute() else Path(relative).resolve()
+            if not path.is_file():
+                result.missing_files.append(relative)
+        if result.missing_files:
+            result.error = "expected files missing: " + ", ".join(result.missing_files)
+        elif spec.expected_clean is True and result.dirty:
+            result.error = "expected clean state"
+        elif spec.expected_clean is False and not result.dirty:
+            result.error = "expected dirty state"
+        elif spec.expected_commit and not result.commit.startswith(spec.expected_commit):
+            result.error = f"expected commit {spec.expected_commit}, got {result.commit}"
+    if result.error is None and result.commands and all(item.status == "passed" for item in result.commands):
+        result.status = "passed"
     result.finished = datetime.now().isoformat()
-    result.duration_seconds = round(__import__("time").monotonic() - clock, 3)
+    result.duration_seconds = round(time.monotonic() - clock, 3)
     (directory / "result.json").write_text(json.dumps(result.as_dict(), indent=2) + "\n", encoding="utf-8")
     return result
 
