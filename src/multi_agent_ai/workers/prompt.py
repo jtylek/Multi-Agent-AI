@@ -107,6 +107,8 @@ def verification_command(plan: Plan, subtask_id: str) -> str | None:
     match = per_subtask.search(text)
     if match:
         return match.group(1).strip()
+    if len(plan.subtasks) > 1:
+        return None
     codes = _INLINE_CODE.findall(text)
     return codes[-1].strip() if codes else None
 
