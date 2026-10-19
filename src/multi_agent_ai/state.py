@@ -18,6 +18,7 @@ from typing import Any, TypeVar
 
 from .document import atomic_write
 from .models import OPERATIONAL_RECORDS
+from .profile import ensure_starter_profile
 
 DEFAULT_STATE_ROOT = ".multi-agent-ai"
 CONFIG_FILE = "config.json"
@@ -75,6 +76,7 @@ def init_state_root(project_root: Path | str = ".", state_root: Path | str | Non
     if not root.config_path.exists() or root.config_path.read_text(encoding="utf-8") != text:
         atomic_write(root.config_path, text)
     StateIndex.open(root.database_path).close()
+    ensure_starter_profile(project_root, root.path)
     return root
 
 
