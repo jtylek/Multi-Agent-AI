@@ -119,7 +119,14 @@ class StateIndex:
         else:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
             connection = sqlite3.connect(str(path))
-            connection.executescript(_SCHEMA)
+        try:
+            if not read_only:
+                connection.executescript(_SCHEMA)
+        except BaseException:
+            # A corrupt or locked database must not leave the file handle open: on Windows an
+            # open handle keeps the file from being deleted or replaced.
+            connection.close()
+            raise
         return cls(connection)
 
     def close(self) -> None:
