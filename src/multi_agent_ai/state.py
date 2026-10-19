@@ -71,6 +71,7 @@ def init_state_root(project_root: Path | str = ".", state_root: Path | str | Non
         "project_root": str(Path(project_root).resolve()),
         "state_root": str(root.path),
         "database": DATABASE_FILE,
+        "profile": str(root.path / "project-profile.toml"),
     }
     text = json.dumps(config, indent=2) + "\n"
     if not root.config_path.exists() or root.config_path.read_text(encoding="utf-8") != text:

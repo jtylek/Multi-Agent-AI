@@ -78,7 +78,8 @@ the Windows-runtime milestone. (T3 items 7 and 10.)
 
 ## D9. State root is project configuration, default `.multi-agent-ai/`: Accepted (coordinator), generalised per user
 
-The state root holds `messages/`, `tasks/`, the planned `registry/` and the SQLite database.
+The state root holds `messages/`, `tasks/`, the planned `registry/`, the starter
+`project-profile.toml` and the SQLite database.
 Default `.multi-agent-ai/` in the primary checkout, excluded from Git. A project profile may
 set another path (for example `storage/framework/agents/` for a Laravel project). `init`
 records it; workers read it and never infer it from their worktree. No project's paths are
@@ -150,6 +151,14 @@ How the document is read:
   until then.
 - Prerequisite already planned: T18 (CLI version detection), because quota detection is off
   while no CLI version is known.
+
+## D16. Starter project-profile location: Accepted (coordinator), 2026-10-20
+
+M1 `init` creates `project-profile.toml` inside the configured state root. It is a starter TOML
+document only; the engine does not read, validate or enforce it yet. This location is canonical
+for M1 so the orchestrator and worker worktrees share one state-root copy, with two known caveats:
+it is not versioned or shared between clones, and `init` should print the path so newcomers can
+find it. A later milestone may add a versioned project-level profile with explicit precedence.
 
 ## Open
 
