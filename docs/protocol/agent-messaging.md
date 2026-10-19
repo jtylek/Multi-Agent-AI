@@ -285,3 +285,91 @@ new helper as a substitute for delivery to a specified existing agent.
 
 Workers the orchestrator launches itself receive assignments through orchestrator-controlled
 invocation and state. That is different from taking over an unrelated interactive chat.
+
+**What a managed worker is.** One headless provider process (`codex exec`, `copilot -p`)
+started by `multi-agent-ai worker run` for one subtask in one mode (`review` or
+`implement`), under a **new** agent id such as `codex-w1` or `copilot-w1`. It is never
+presented as an existing interactive chat: the runner refuses product names (`codex`,
+`copilot`, `claude`, `code`), the coordinator of any plan, any mailbox participant (sender,
+recipient, ack author), a registry entry, an owner/reviewer named in another plan row, and an
+id with a status file not written by a managed worker of the same provider.
+
+**Assigned by invocation, not by the mailbox.** The assignment is the command line and the
+prompt; no request is written and **no acknowledgment is written or implied**. Nothing about
+a managed run proves delivery to, or agreement by, any other agent; a zero exit code is
+evidence about the process only. The runner writes, on the worker's behalf:
+
+- `status-<agent-id>.md` (formats.md section 5): `in progress` at launch, then `review` on
+  success or `blocked` with `<failure class>: <detail>` in `blockers`; the body starts with
+  `Managed worker: provider=<provider>`;
+- in review mode, on success, `review-<subtask>-<agent-id>.md`: an orchestrator provenance
+  header (subtask, agent, provider, model, commit reviewed, attempt, profile, exit code, plan
+  revision, updated), a blank line, then the worker's final message **verbatim**;
+- `<state-root>/runs/<attempt-id>/`: `prompt.md`, `stdout.log`, `stderr.log`,
+  `final-message.md`, `result.json` (argv with the prompt replaced by `<PROMPT>` and its
+  SHA-256, environment variable names only, timings, exit code, failure class, usage), and
+  for Copilot `usage.json`; plus an `Attempt` row in the derived SQLite index. Token usage is
+  recorded only as the provider reported it, else the literal `unknown`.
+
+**Prompt.** Built deterministically from `plan.md` (goal, the subtask row, acceptance
+criteria and verification sections for that subtask) plus mode rules: work only inside the
+worktree; do not commit, push, merge, branch or tag; the board is read-only; review mode
+modifies nothing. Codex reads it from stdin; Copilot gets it as the `-p` argument.
+
+**Launch profiles** (least privilege; no bypass flag is ever emitted, and a test scans every
+generated argv against a denylist):
+
+```text
+codex exec -C <wt> -s read-only       --ephemeral --color never --json -o <run>/final-message.md [-m M] -
+codex exec -C <wt> -s workspace-write --ephemeral --color never --json -o <run>/final-message.md [-m M] -
+
+copilot -C <wt> -p <PROMPT> --output-format json --silent --session-id <uuid>
+        --usage-output-file <run>/usage.json --disallow-temp-dir [--model M]
+        --available-tools=bash,view,grep,glob
+        --allow-tool=shell(git diff),shell(git log),shell(git show),shell(<verify>)
+        --deny-tool=shell(git commit),shell(git push),url
+  implement: --available-tools=bash,create,edit,view,grep,glob and ",write" appended to --allow-tool
+```
+
+`--ephemeral` keeps a managed Codex run out of Codex's persisted sessions, so it can never be
+listed or resumed as if it were an interactive chat. Copilot gets no `--add-dir`, so its
+file tools are limited to the worktree; `<verify>` is the verification command from the plan
+(or `--verify-command`), and without one the Copilot profile is unconfigured and the worker
+is not started. The exact form of `<verify>` that Copilot matches (absolute
+`.venv\Scripts\python.exe` versus a bare name) is unverified until the first real run.
+
+**Limits of these profiles.** Say them plainly:
+
+- "Deny network" is CLI-level only: Copilot's `url` permission and the excluded web tools,
+  Codex's sandbox defaults. It is not an OS egress boundary; an allowed test command can open
+  connections itself.
+- Review mode still allows the verification executable, which can run arbitrary code. "Review
+  is read-only" is enforced by the orchestrator comparing the worktree (status, content
+  hashes of changed paths, HEAD, branch) and the primary checkout's HEAD before and after the
+  run, not by the provider's permissions alone. **Writes outside the worktree by an allowed
+  command are not detected** by that check. OS-level isolation (filesystem and network) is
+  future work.
+- The deny patterns cover direct `git commit` / `git push` shell calls only. The
+  orchestrator-side checks are the real guard: after an implement run the runner verifies
+  that HEAD, the branch and its tip did not move and that no new ref points at the
+  worktree's HEAD, then commits the changes itself on `task/<task-id>/<subtask-id>` with an
+  attributable message (agent, provider, model, attempt). It never merges or pushes. It
+  refuses implement mode in the primary checkout, on `main`/`master` or a configured live
+  branch, on any other branch than the subtask's, and in a dirty worktree.
+
+**Failure classes** (primary class, first that applies; never retried automatically):
+`profile_unconfigured`, `environment` (invalid/dirty worktree, refused branch, unknown commit),
+`launch_error` (executable missing or not startable), `invalid_arguments` (refused before
+launch, or a nonzero exit whose output says so), `review_modified_files`,
+`git_policy_violation`, `timeout` (the whole process tree is killed), `unsupported_model`,
+`auth`, `permission_denied` (a tool or command was denied; reported, the profile is never
+widened), `nonzero_exit`, `malformed_output`, `no_changes` (implement run without a change),
+`commit_failed` (the orchestrator's commit, including hooks, failed). A denied permission goes
+back to the user; it is never routed to another agent to get around it.
+
+**Process handling (Windows).** Provider commands resolve to `.exe`, then `.cmd`/`.bat`, never
+`.ps1`; npm shims run as `node.exe <script>` so the prompt never passes through `cmd.exe`. The
+process tree runs in a kill-on-close Job Object; stdout/stderr stream to files; stdin is the
+prompt file or closed. The environment is an allowlist (system paths, profile directories,
+proxy settings, plus `CODEX_HOME` or `COPILOT_HOME`/`GH_HOST`/`COPILOT_GH_HOST`); API keys and
+tokens are passed only when named with `--pass-env`, and `COPILOT_ALLOW_ALL` never.
