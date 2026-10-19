@@ -111,8 +111,9 @@ must equal the id in the `agent:` line.
 | `plan-revision` | when the request concerns a plan revision | positive integer; written after `status` |
 | body | expected for `changes requested` | response and outstanding issues |
 
-A request concerns a plan revision when it carries a `plan-revision` header or its body says
-so. An ack to such a request without `plan-revision` is **invalid** and does not count. An ack
+A request concerns a plan revision only when it carries a `plan-revision` header; the body is
+never parsed for it. An ack to such a request without `plan-revision` is **invalid** and does
+not count. A request without the header concerns no revision, whatever its prose says. An ack
 quoting an older revision is recorded as stale and does not count.
 
 Semantics a parser keeps separate: `received` ≠ `agreed`; an ack may reject; "all agreed"

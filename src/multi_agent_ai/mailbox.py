@@ -26,7 +26,6 @@ from .models import ACK_STATUSES, BROADCAST, Ack, Parsed, Request
 REQUEST_FILE = "request.md"
 ACK_PREFIX, ACK_SUFFIX = "ack-", ".md"
 _AGENT_FIELD = re.compile(r"([^\s(]+)\s*(?:\((.*)\))?")
-_BODY_REVISION = re.compile(r"\brevision\b[\s:]*(\d+)", re.IGNORECASE)
 
 
 def ack_file_name(agent_id: str) -> str:
@@ -100,22 +99,12 @@ def parse_request(doc: Document, directory: str | None = None) -> Parsed[Request
     return Parsed(request, errors, warnings)
 
 
-def request_revision(request: Request) -> tuple[int | None, list[str]]:
-    """The plan revision a request concerns: its header, else revisions its body names.
+def request_revision(request: Request) -> int | None:
+    """The plan revision a request concerns: only its ``plan-revision`` header says so.
 
-    When the body names several revisions the highest is used, with a warning.
+    The body is never parsed for it (decision D5, plan revision 11).
     """
-    if request.plan_revision is not None:
-        return request.plan_revision, []
-    found = sorted({int(n) for n in _BODY_REVISION.findall(request.body) if int(n) > 0})
-    if not found:
-        return None, []
-    warnings = [f"plan revision {found[-1]} inferred from the request body"]
-    if len(found) > 1:
-        warnings.append(
-            f"request body names revisions {', '.join(map(str, found))}; the highest is required"
-        )
-    return found[-1], warnings
+    return request.plan_revision
 
 
 def render_request(request: Request) -> str:
@@ -229,12 +218,12 @@ def evaluate_agreement(request: Request, acks: dict[str, Parsed[Ack]]) -> Agreem
     ``acks`` maps the agent id taken from each ack file name to its parse result. Only ack
     files count: nothing else (exit codes, transport results, SQLite rows) is consulted.
     """
-    required, warnings = request_revision(request)
+    required = request_revision(request)
     states = {agent: _ack_state(parsed, agent, required) for agent, parsed in acks.items()}
 
     if request.is_broadcast:
         recipients = [states[a] for a in sorted(states)]
-        return Agreement(required, recipients, [], None, warnings)
+        return Agreement(required, recipients, [], None)
 
     recipients = [states.get(a, RecipientState(a, "missing")) for a in request.to]
     unaddressed = []
@@ -246,7 +235,7 @@ def evaluate_agreement(request: Request, acks: dict[str, Parsed[Ack]]) -> Agreem
     agreed = [r for r in recipients if r.counts and r.state == "agreed"]
     revisions = {r.plan_revision for r in agreed}
     all_agreed = len(agreed) == len(recipients) and len(revisions) == 1
-    return Agreement(required, recipients, unaddressed, all_agreed, warnings)
+    return Agreement(required, recipients, unaddressed, all_agreed)
 
 
 # --- files -----------------------------------------------------------------------------
@@ -310,7 +299,7 @@ def write_ack(state_root: Path, ack: Ack, author: str) -> Path:
         raise ValueError("cannot acknowledge an unreadable request: " + "; ".join(request.errors))
     if not request.value.is_broadcast and author not in request.value.to:
         raise OwnershipError(f"request '{ack.message_id}' is not addressed to '{author}'")
-    required, _ = request_revision(request.value)
+    required = request_revision(request.value)
     if required is not None and ack.plan_revision != required:
         raise ValueError(f"the request concerns plan revision {required}; quote it in the ack")
     text = render_ack(ack)

@@ -51,10 +51,10 @@ Where formats.md left room, the implementation chose the conservative reading:
    the status example and the third ack example in formats.md) is valid but carries the
    "missing blank separator" warning, exactly as section 1 rule 3 states. Writers always emit
    the blank line.
-2. **"Body says so".** A request without a `plan-revision` header concerns a plan revision when
-   its body contains `revision <n>` (case-insensitive, including `plan-revision: <n>`). If
-   several numbers appear, the highest is required and a warning is shown. Acks to such a
-   request without `plan-revision` are invalid.
+2. **Header-only.** A request concerns a plan revision only if it has a `plan-revision`
+   header; the body is never parsed for it (plan revision 11 replaced an earlier reading that
+   inferred it from the body). Acks to a header-carrying request without `plan-revision` are
+   invalid.
 3. **Ack revision newer than the request's.** Reported as `mismatch` and not counted (only
    acks quoting the same revision count; formats.md only names the older case, `stale`).
 4. **"All agreed" without a revision.** Agreed acks must still quote the same

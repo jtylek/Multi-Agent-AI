@@ -176,10 +176,20 @@ def test_forged_ack_does_not_count():
     assert state.recipients[1].state == "invalid" and state.all_agreed is False
 
 
-def test_revision_inferred_from_body_uses_highest_with_warning():
-    revision, warnings = request_revision(Request("r", "c", ("a",), "Plan revision 3. Second review (plan revision 4)."))
-    assert revision == 4 and len(warnings) == 2
-    assert request_revision(Request("r", "c", ("a",), "No numbers here.")) == (None, [])
+def test_request_concerns_a_revision_only_through_its_header():
+    body = "Plan revision 3. Second review (plan revision 4)."
+    assert request_revision(Request("r", "c", ("a",), body)) is None
+    assert request_revision(Request("r", "c", ("a",), body, plan_revision=5)) == 5
+
+
+def test_ack_to_request_without_header_is_valid_even_if_body_names_a_revision():
+    # Real case: the kickoff request said "(revision 1)" in prose and had no header, so its
+    # acks without plan-revision are valid (plan revision 11, decision 1).
+    request = req("id: r\nfrom: c\nto: a\n\nKickoff of plan (revision 1).\n").value
+    state = evaluate_agreement(request, {"a": ack("id: r\nagent: a\nstatus: agreed\n\n", "r", "a")})
+    assert state.required_revision is None
+    assert state.recipients[0].state == "agreed" and state.recipients[0].counts
+    assert state.all_agreed is True
 
 
 # --- files and writers -----------------------------------------------------------------

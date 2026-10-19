@@ -51,7 +51,9 @@ status and registry field names are this project's definitions. (T3 items 2 and 
 ## D5. Ack `plan-revision`: Accepted (coordinator)
 
 Required when the request concerns a plan revision; such an ack without it is invalid.
-"All agreed" counts only acks quoting the same revision. (T3 item 3.)
+A request concerns a plan revision only if it carries a `plan-revision:` header; the body is
+never parsed for it (decided in plan revision 11, after the inferred reading rejected three
+valid kickoff acks). "All agreed" counts only acks quoting the same revision. (T3 item 3.)
 
 ## D6. Agent id grammar: Accepted (coordinator)
 
