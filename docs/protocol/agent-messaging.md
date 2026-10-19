@@ -325,11 +325,27 @@ codex exec -C <wt> -s workspace-write             --color never --json -o <run>/
 
 copilot -C <wt> -p <PROMPT> --output-format json --silent --session-id <uuid>
         --usage-output-file <run>/usage.json --disallow-temp-dir [--model M]
-        --available-tools=bash,view,grep,glob
+        --available-tools=powershell,view,grep,glob
         --allow-tool=shell(git diff),shell(git log),shell(git show),shell(<verify>)
         --deny-tool=shell(git commit),shell(git push),url
-  implement: --available-tools=bash,create,edit,view,grep,glob and ",write" appended to --allow-tool
+  implement: --available-tools=powershell,create,edit,view,grep,glob and ",write" appended to --allow-tool
+  (the shell tool name is `SHELL_TOOL` in workers/copilot.py; T13 documented `bash`, which Copilot on
+   Windows answered with "Tool 'bash' does not exist"; `powershell` is a best guess, see below)
 ```
+
+Copilot shell tool (T28): `copilot --help`, `copilot help permissions` and the installed package do
+not name the Windows shell tool (the CLI's code is compressed inside its binary), so the name is the
+single constant `SHELL_TOOL` (`make_profiles(shell_tool)` for tests) and one approved real run
+confirms or flips it. The `shell(...)` permission kind in `--allow-tool`/`--deny-tool` is documented
+for every shell command and does not change. Before an implement run starts the orchestrator
+creates, inside the worktree only, the directories implied by the subtask's `files/area` (parent of
+a file, the directory of an area ending in `/`, the literal prefix of a glob), so a worker does not
+need a shell for `mkdir`; absolute, drive-letter, UNC, `..`, `.git`, reserved-name and
+symlink/junction paths refuse the whole run as `environment` before anything is created or started,
+and a dry run lists `directories_to_create` and writes nothing. Copilot's `usage.json` totals
+(`tokenDetails` input/cache_read/cache_write/output, reasoning tokens, request count, premium
+request cost, model, plus the last-call values) are stored in the attempt as `usage_totals`,
+`source: measured`.
 
 `--ephemeral` (review runs only) keeps a managed Codex review out of Codex's persisted sessions.
 Implement runs keep their session so a usage limit can be resumed with `codex exec resume <id>`

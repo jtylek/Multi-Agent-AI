@@ -49,6 +49,11 @@ listed below is planned, not implemented.
   writes nothing and never calls a provider, so sign-in is always reported as `not checked`.
   Statuses: `ok`, `warn`, `fail`, `not checked`; a missing CLI is a warning unless none is
   installed; exit 1 only when a check fails.
+- T28: the Copilot shell tool is a profile data field (`SHELL_TOOL`); implement runs pre-create the
+  parent directories of the subtask's `files/area` inside the worktree (all-or-none, unsafe paths
+  refuse the run as `environment`, dry run reports `directories_to_create`, module
+  `workers/scaffold.py`); Copilot's full `usage.json` totals are recorded in the attempt as measured
+  `usage_totals`.
 - CLI `worker run --provider codex|copilot --task T --subtask S --agent-id ID --mode
   review|implement --worktree ABS [--model M] [--timeout S] [--commit SHA]
   [--verify-command C] [--live-branch B]... [--pass-env NAME]... [--execute]`: one managed
@@ -97,7 +102,10 @@ bounded watches (formats.md section 7); Claude Code worker adapter; OS-level iso
 workers (filesystem/network); creating worktrees; verification and routing; VS Code
 integration.
 
-Unverified until the first real run: Copilot's matching of `shell(<verification command>)`,
+Unverified until the first real run (Copilot, T28): the Windows name of the shell tool for
+`--available-tools` (`SHELL_TOOL = "powershell"` is a guess; `bash` was rejected as nonexistent in
+the first real run) and therefore still the matching of `shell(<verification command>)`.
+Unverified, earlier: Copilot's matching of `shell(<verification command>)`,
 prompt mode without `--allow-all-tools` when tools are used, Copilot's JSONL event schema
 (final message extraction is defensive) and `usage.json` fields; Codex's `--json` usage
 event shape (tokens are taken from any `usage` object with integer `*token*` fields).
