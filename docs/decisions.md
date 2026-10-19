@@ -123,7 +123,8 @@ fallback remains for when discovery or queueing fails. Details: docs/protocol/ag
 ## D15. Next direction: `docs/next-milestone.md` (M1 real multi-agent execution): Decided (user), 2026-10-19
 
 [next-milestone.md](next-milestone.md) is the recommended current implementation direction. It
-is a recommendation, not a specification: where it conflicts with `AGENTS.md`, this file or the
+was written by a ChatGPT agent at the user's request and committed to `main` (5714460) outside
+joint task `m0-foundation`; no board agent wrote or reviewed it. It is a recommendation, not a specification: where it conflicts with `AGENTS.md`, this file or the
 protocol documents, those win, and the conflict is resolved by an explicit change to them.
 
 What is adopted: the next milestone is "M1 — Real Multi-Agent Execution", one complete
