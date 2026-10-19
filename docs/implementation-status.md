@@ -39,6 +39,13 @@ listed below is planned, not implemented.
 - Notification transport (`notify.py` and `notify`): dry-run by default; with explicit `--send`,
   sends mailbox pointers through configured Codex/Copilot contacts and reports Claude/manual relay
   targets. Transport is never an ack.
+- CLI `doctor [--project-root P] [--state-root S] [--json]` (T20, `doctor.py`): read-only
+  readiness report with a plain-language fix for each problem: Python >= 3.11, Git and the
+  project repository, each provider CLI (Codex, Copilot, Claude Code: found on PATH, version via
+  its own `--version`), the state root and index, and time zone data. It runs nothing else,
+  writes nothing and never calls a provider, so sign-in is always reported as `not checked`.
+  Statuses: `ok`, `warn`, `fail`, `not checked`; a missing CLI is a warning unless none is
+  installed; exit 1 only when a check fails.
 - CLI `worker run --provider codex|copilot --task T --subtask S --agent-id ID --mode
   review|implement --worktree ABS [--model M] [--timeout S] [--commit SHA]
   [--verify-command C] [--live-branch B]... [--pass-env NAME]... [--execute]`: one managed
