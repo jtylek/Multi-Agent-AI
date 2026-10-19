@@ -10,6 +10,8 @@ from typing import Sequence
 
 from .board import check_revision_progress
 from .grammar import parse_timestamp
+from .notify import format_notify, notify_message
+from .reachability import discover_agents
 from .report import format_text, index_entries, scan, to_dict
 from .state import StateIndex, init_state_root, read_config, resolve_state_root
 
@@ -24,6 +26,8 @@ def _parser() -> argparse.ArgumentParser:
         "init": "create the state root layout, record it, and create the derived SQLite index",
         "inspect": "show messages, acknowledgment state, plans, subtasks and staleness (read-only)",
         "index": "rebuild the derived SQLite index from the coordination files",
+        "agents": "discover reachable Claude sessions and Codex threads for the project root (read-only)",
+        "notify": "notify recipients of a durable mailbox request without creating acknowledgments",
     }
     for name, help_text in commands.items():
         cmd = sub.add_parser(name, help=help_text, description=help_text)
@@ -33,8 +37,14 @@ def _parser() -> argparse.ArgumentParser:
             default=None,
             help="state root, absolute or relative to the project root (default: .multi-agent-ai)",
         )
-        if name == "inspect":
+        if name in {"inspect", "agents", "notify"}:
             cmd.add_argument("--json", action="store_true", help="machine-readable output")
+        if name == "agents":
+            cmd.add_argument("--timeout", type=float, default=15, help="provider discovery timeout in seconds")
+        if name == "notify":
+            cmd.add_argument("message_id", help="durable mailbox message id")
+            cmd.add_argument("--timeout", type=float, default=15, help="transport timeout in seconds")
+        if name == "inspect":
             cmd.add_argument("--now", help="evaluate staleness at this local time (YYYY-MM-DD HH:MM)")
     return parser
 
@@ -43,6 +53,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="backslashreplace")
     args = _parser().parse_args(argv)
+    project_root = resolve_state_root(args.project_root).path.parent
+
+    if args.command == "agents":
+        result = discover_agents(project_root, timeout=args.timeout)
+        if args.json:
+            print(json.dumps(result.as_dict(), indent=2, ensure_ascii=False))
+        else:
+            for agent in result.agents:
+                status = f" status={agent.status}" if agent.status else ""
+                print(f"{agent.product}\t{agent.id}\t{agent.name}\t{agent.cwd}{status}")
+            for error in result.errors:
+                print(f"error\t{error}", file=sys.stderr)
+        return 0 if result.agents or not result.errors else 1
+
     root = resolve_state_root(args.project_root, args.state_root)
 
     if args.command == "init":
@@ -68,6 +92,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             sys.stdout.write(format_text(report))
         return 0
+
+    if args.command == "notify":
+        if not root.path.is_dir():
+            print(f"state root not found: {root.path}", file=sys.stderr)
+            return 2
+        try:
+            results = notify_message(root.path, args.message_id, project_root, timeout=args.timeout)
+        except (OSError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        if args.json:
+            print(json.dumps([item.as_dict() for item in results], indent=2, ensure_ascii=False))
+        else:
+            sys.stdout.write(format_notify(results))
+        return 0 if all(item.submitted or item.method == "manual" or item.method == "claude target" for item in results) else 1
 
     # index
     if not root.database_path.is_file():

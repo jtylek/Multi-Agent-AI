@@ -127,11 +127,12 @@ Windows implementation must correctly resolve `.exe`, `.cmd`, and `.bat` entrypo
 
 ## Current implementation
 
-The first package (milestone M0) implements the protocol/state foundation only: typed models,
-a parser and writer for the coordination files in [docs/protocol/formats.md](docs/protocol/formats.md),
-a configurable state root with a derived SQLite index, and a small CLI. It needs Python 3.11+
-and uses only the standard library at runtime. Agent execution, provider adapters, routing,
-the registry and the VS Code integration are not implemented yet; see
+The first package (milestone M0) implements the protocol/state foundation plus read-only
+reachability and mailbox-pointer notification: typed models, a parser and writer for the
+coordination files in [docs/protocol/formats.md](docs/protocol/formats.md), a configurable
+state root with a derived SQLite index, and a small CLI. It needs Python 3.11+ and uses only
+the standard library at runtime. Agent execution, routing, the registry and the VS Code
+integration are not implemented yet; see
 [docs/implementation-status.md](docs/implementation-status.md).
 
 ```powershell
