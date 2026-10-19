@@ -552,6 +552,7 @@ Before making architectural changes, also read:
 - `docs/protocol/agent-messaging.md` — **authoritative** messaging and joint-task protocol
 - `docs/protocol/formats.md` — **authoritative** coordination file grammar
 - `docs/decisions.md` — decided / accepted / proposed / open decisions
+- `docs/agent-rules.md` — standing rules for every agent, including agents outside the task board
 - `docs/case-studies/epesi-field-report.md` — lessons from two real multi-agent rounds and derived requirements
 
 `docs/protocol/upstream/` holds the original protocol verbatim for provenance only; the documents above supersede it.
