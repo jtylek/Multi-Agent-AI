@@ -128,6 +128,9 @@ subtask table:
 
 - `files/area` is the ownership scope; active subtasks must not overlap unless the coordinator
   explicitly resolves it. For a shared document, assign named sections or serialize changes.
+- Worktrees are created and integrated with `multi-agent-ai workspace` (decision D17): dry run
+  unless `--execute`, worktrees outside the project and state root, only reviewed commits merged,
+  failed worktrees retained.
 - `worktree: yes` means the subtask works on branch `task/<task-id>/<subtask-id>` in its own
   worktree from the base commit; `no` means it works in the primary checkout on its owned
   files only. A worktree may need its own dependency install and environment files; the
