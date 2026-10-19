@@ -274,7 +274,10 @@ reservation), `status`, optional `contact`; values may be column-aligned; no bod
 about three hours without `updated`; a stale or inactive entry releases its reservation. The
 registry implementation must refuse an assignment whose files/area overlaps an active
 reservation unless the coordinator revises the plan. The registry filename id must match the
-`agent` header.
+`agent` header. The inactive status set is `idle`, `done`, `finished`, `failed`, `stopped`, or
+`offline`; unknown statuses, including `blocked`, retain their reservation. An `updated` value
+without a time is visible with a warning but releases its reservation because staleness cannot be
+evaluated safely.
 
 ## 7. Behaviour to test with the parser
 

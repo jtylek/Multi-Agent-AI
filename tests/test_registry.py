@@ -37,6 +37,25 @@ def test_active_reservation_rejects_parent_and_glob_overlap(tmp_path):
         raise AssertionError("overlapping reservation was accepted")
 
 
+def test_disjoint_areas_do_not_conflict_and_globs_are_conservative(tmp_path):
+    root = init_state_root(tmp_path)
+    write_entry(root.path, "src-a", files="src/a/")
+    write_entry(root.path, "file-a", files="a.py")
+    write_entry(root.path, "glob", files="docs/*.md")
+    assert not reservation_conflicts(root.path, "src/b/file.py", now=datetime(2026, 10, 20, 11))
+    assert not reservation_conflicts(root.path, "b.py", now=datetime(2026, 10, 20, 11))
+    assert not reservation_conflicts(root.path, "srcx/file.py", now=datetime(2026, 10, 20, 11))
+    assert reservation_conflicts(root.path, "docs/readme.md", now=datetime(2026, 10, 20, 11))
+
+
+def test_parenthesised_paths_are_preserved_except_trailing_annotations(tmp_path):
+    root = init_state_root(tmp_path)
+    write_entry(root.path, "paren", files="src/(app)/page.tsx")
+    assert reservation_conflicts(root.path, "src/(app)/page.tsx", now=datetime(2026, 10, 20, 11))
+    write_entry(root.path, "annotated", files="src/app.tsx (generated)")
+    assert reservation_conflicts(root.path, "src/app.tsx", now=datetime(2026, 10, 20, 11))
+
+
 def test_stale_and_inactive_entries_release_reservations(tmp_path):
     root = init_state_root(tmp_path)
     write_entry(root.path, "stale", updated="2026-10-20 06:00", files="src/")
@@ -44,6 +63,14 @@ def test_stale_and_inactive_entries_release_reservations(tmp_path):
     now = datetime(2026, 10, 20, 10, 1)
     assert not reservation_conflicts(root.path, "src/a.py", now=now)
     assert not reservation_conflicts(root.path, "docs/a.md", now=now)
+
+
+def test_date_only_updated_releases_reservation_with_warning(tmp_path):
+    root = init_state_root(tmp_path)
+    write_entry(root.path, "date-only", updated="2026-10-20", files="src/")
+    parsed = read_registry(root.path)["date-only"]
+    assert parsed.ok and any("reservation is released" in warning for warning in parsed.warnings)
+    assert not reservation_conflicts(root.path, "src/a.py", now=datetime(2026, 10, 20, 11))
 
 
 def test_registry_cli_lists_and_reports_conflict(tmp_path, capsys):

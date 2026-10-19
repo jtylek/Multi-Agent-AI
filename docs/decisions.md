@@ -78,7 +78,7 @@ the Windows-runtime milestone. (T3 items 7 and 10.)
 
 ## D9. State root is project configuration, default `.multi-agent-ai/`: Accepted (coordinator), generalised per user
 
-The state root holds `messages/`, `tasks/`, the planned `registry/` and the SQLite database.
+The state root holds `messages/`, `tasks/`, the `registry/` and the SQLite database.
 Default `.multi-agent-ai/` in the primary checkout, excluded from Git. A project profile may
 set another path (for example `storage/framework/agents/` for a Laravel project). `init`
 records it; workers read it and never infer it from their worktree. No project's paths are
@@ -153,5 +153,7 @@ How the document is read:
 
 ## Open
 
-- **O2. Registry.** Format specified (`formats.md` section 6); implementation, reservation
-  checks and its CLI are later work.
+- **O2. Registry.** Implemented in `src/multi_agent_ai/registry.py` with the `registry` CLI and
+  worker-run reservation enforcement. Registry files remain authoritative; stale/date-only
+  entries and documented inactive statuses release reservations, while unknown statuses retain
+  them.

@@ -28,7 +28,7 @@ listed below is planned, not implemented.
   the highest plan revision seen per task, and operational records. It never stores or infers
   an acknowledgment.
 - CLI `multi-agent-ai` / `python -m multi_agent_ai`:
-  - `init [--project-root P] [--state-root S]`: creates `messages/`, `tasks/`, `config.json`
+  - `init [--project-root P] [--state-root S]`: creates `messages/`, `tasks/`, `registry/`, `config.json`
     and the index; never touches existing coordination files or `.gitignore`.
   - `inspect [--state-root S] [--json] [--now "YYYY-MM-DD HH:MM"]`: read-only report of
     messages with per-recipient ack state, tasks with plan revision and subtask states, and
@@ -73,7 +73,7 @@ listed below is planned, not implemented.
 
 ## Not implemented
 
-Registry (`registry/`, O2) and reservation checks; review-file parsing; message cleanup and
+Review-file parsing; message cleanup and
 bounded watches (formats.md section 7); Claude Code worker adapter; OS-level isolation of
 workers (filesystem/network); creating worktrees; verification and routing; VS Code
 integration.

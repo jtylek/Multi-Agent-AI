@@ -29,6 +29,7 @@ from ..document import DocumentError, OwnershipError, atomic_write, read_documen
 from ..grammar import format_timestamp, id_error
 from ..mailbox import ACK_PREFIX, ACK_SUFFIX, REQUEST_FILE
 from ..models import Attempt, Plan, Status, Subtask
+from ..registry import reservation_conflicts
 from ..state import StateIndex, StateRoot
 from . import failures as fc
 from . import gitops, quota
@@ -272,6 +273,9 @@ def run_worker(
         raise UsageError(f"plan for task {req.task_id} has no valid revision")
     if conflict := agent_id_conflict(req.state_root.path, req):
         raise UsageError(f"agent id rejected: {conflict}")
+    if conflicts := reservation_conflicts(req.state_root.path, subtask.files, agent=req.agent_id):
+        detail = "; ".join(f"{item.agent}: {', '.join(item.shared)}" for item in conflicts)
+        raise UsageError(f"reservation conflict: assignment for {req.subtask_id} overlaps active reservation ({detail})")
 
     adapter = adapter or ADAPTERS[req.provider]()
     started = datetime.now()
@@ -466,6 +470,9 @@ def preview_worker(
         raise UsageError(f"plan for task {req.task_id} has no valid revision")
     if conflict := agent_id_conflict(req.state_root.path, req):
         raise UsageError(f"agent id rejected: {conflict}")
+    if conflicts := reservation_conflicts(req.state_root.path, subtask.files, agent=req.agent_id):
+        detail = "; ".join(f"{item.agent}: {', '.join(item.shared)}" for item in conflicts)
+        raise UsageError(f"reservation conflict: assignment for {req.subtask_id} overlaps active reservation ({detail})")
     adapter = adapter or ADAPTERS[req.provider]()
     problems: list[str] = []
     preview: dict[str, Any] = {

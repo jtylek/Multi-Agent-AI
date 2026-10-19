@@ -443,6 +443,19 @@ def test_a_limit_message_on_a_successful_exit_is_not_reclassified(env):
     assert env.run().failure_class is None
 
 
+def test_worker_refuses_active_overlapping_reservation_before_run(env):
+    registry = env.root.path / "registry" / "other.md"
+    registry.write_text(
+        "agent: other\nstarted: 2026-10-20 09:00\nupdated: 2026-10-20 10:00\n"
+        "task: other-task\nfiles: src/\nstatus: working\n",
+        encoding="utf-8",
+    )
+    before = set(env.root.path.rglob("*"))
+    with pytest.raises(UsageError, match=r"reservation conflict.*other.*src"):
+        env.run()
+    assert set(env.root.path.rglob("*")) == before
+
+
 # --- process failures ---------------------------------------------------------------------------
 
 

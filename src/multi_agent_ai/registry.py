@@ -19,6 +19,8 @@ from .models import Parsed
 REGISTRY_DIR = "registry"
 REGISTRY_SUFFIX = ".md"
 REQUIRED_KEYS = ("agent", "started", "updated", "task", "files", "status")
+# These terminal/presence states release reservations. Unknown states (including ``blocked``)
+# remain active until a coordinator explicitly changes them or the timestamp becomes stale.
 INACTIVE_STATUSES = frozenset({"idle", "done", "finished", "failed", "stopped", "offline"})
 
 
@@ -43,7 +45,6 @@ class ReservationConflict:
     agent: str
     files: tuple[str, ...]
     shared: tuple[str, ...]
-    stale: bool = False
 
 
 class ReservationError(ValueError):
@@ -51,7 +52,7 @@ class ReservationError(ValueError):
 
 
 def _normalise_item(value: str) -> str:
-    value = re.sub(r"\([^)]*\)", "", value).strip().replace("\\", "/").lower()
+    value = re.sub(r"\s+\([^)]*\)$", "", value.strip()).replace("\\", "/").lower()
     value = value.removeprefix("./").rstrip("/")
     return value if value and value != "-" else ""
 
@@ -60,8 +61,7 @@ def _overlap(left: str, right: str) -> bool:
     if left == right or left.startswith(right + "/") or right.startswith(left + "/"):
         return True
     # fnmatch gives useful conservative behaviour for the globs allowed by the protocol.
-    candidates = {left, right, left.rstrip("/*"), right.rstrip("/*")}
-    return any(fnmatch.fnmatchcase(candidate, pattern) for candidate in candidates for pattern in (left, right))
+    return fnmatch.fnmatchcase(right, left) or fnmatch.fnmatchcase(left, right)
 
 
 def _read(path: Path) -> Parsed[RegistryEntry]:
@@ -80,7 +80,11 @@ def _read(path: Path) -> Parsed[RegistryEntry]:
         value = doc.get(key)
         if value:
             try:
-                parse_timestamp(value)
+                stamp = parse_timestamp(value)
+                if key == "updated" and not stamp.minute_precision:
+                    warnings = f"'updated' {value!r} has no time; reservation is released because staleness cannot be evaluated"
+                    # Parsed warnings are warnings, not parse errors, so the entry remains visible.
+                    doc.warnings.append(warnings)
             except ValueError as exc:
                 errors.append(str(exc))
     if errors:
@@ -92,7 +96,7 @@ def _read(path: Path) -> Parsed[RegistryEntry]:
                   warnings=list(doc.warnings))
 
 
-def read_registry(state_root: Path, *, now: datetime | None = None) -> dict[str, Parsed[RegistryEntry]]:
+def read_registry(state_root: Path) -> dict[str, Parsed[RegistryEntry]]:
     """Read registry entries without writing; malformed entries remain visible as invalid."""
     root = Path(state_root) / REGISTRY_DIR
     result: dict[str, Parsed[RegistryEntry]] = {}
@@ -106,12 +110,15 @@ def read_registry(state_root: Path, *, now: datetime | None = None) -> dict[str,
     return result
 
 
-def _is_active(entry: RegistryEntry, now: datetime) -> tuple[bool, bool]:
+def _is_active(entry: RegistryEntry, now: datetime) -> bool:
     try:
-        stale = is_stale(parse_timestamp(entry.updated), now) is True
+        stamp = parse_timestamp(entry.updated)
+        if not stamp.minute_precision:
+            return False
+        stale = is_stale(stamp, now) is True
     except ValueError:
-        stale = False
-    return not stale and entry.status.strip().lower() not in INACTIVE_STATUSES, stale
+        return False
+    return not stale and entry.status.strip().lower() not in INACTIVE_STATUSES
 
 
 def reservation_conflicts(state_root: Path, files: str | list[str] | tuple[str, ...], *,
@@ -125,16 +132,15 @@ def reservation_conflicts(state_root: Path, files: str | list[str] | tuple[str, 
     requested = tuple(_normalise_item(item) for item in (re.split(r"[,;]", files) if isinstance(files, str) else files))
     requested = tuple(item for item in requested if item)
     conflicts: list[ReservationConflict] = []
-    for parsed in read_registry(state_root, now=now).values():
+    for parsed in read_registry(state_root).values():
         entry = parsed.value
         if entry is None or entry.agent == agent:
             continue
-        active, stale = _is_active(entry, now)
-        if not active:
+        if not _is_active(entry, now):
             continue
         shared = tuple(sorted({f"{left} <> {right}" for left in requested for right in entry.file_items if _overlap(left, right)}))
         if shared:
-            conflicts.append(ReservationConflict(entry.agent, entry.file_items, shared, stale))
+            conflicts.append(ReservationConflict(entry.agent, entry.file_items, shared))
     return conflicts
 
 

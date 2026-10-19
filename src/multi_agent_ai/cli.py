@@ -105,7 +105,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "registry":
         now = parse_timestamp(args.now).value if args.now else datetime.now()
-        entries = read_registry(root.path, now=now)
+        entries = read_registry(root.path)
         conflicts = reservation_conflicts(root.path, args.files, agent=args.agent_id, now=now) if args.files else []
         if args.json:
             payload = {
