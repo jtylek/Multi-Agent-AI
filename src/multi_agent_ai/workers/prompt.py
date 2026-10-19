@@ -24,6 +24,10 @@ _INLINE_CODE = re.compile(r"`([^`\n]+)`")
 NOT_FOUND = "(not found in plan.md)"
 
 
+class VerificationNotDeclared(ValueError):
+    """A plan does not declare an unambiguous verification command for a subtask."""
+
+
 @dataclass(frozen=True)
 class Section:
     level: int
@@ -96,11 +100,30 @@ def verification_text(plan: Plan, subtask_id: str) -> str:
     return "\n".join(found) or NOT_FOUND
 
 
-def verification_command(plan: Plan, subtask_id: str) -> str | None:
-    """The last inline-code span of the verification text, else None. For a sequence such as
-    "`a` then `b` then `c`" that is the final command, normally the test run."""
-    codes = _INLINE_CODE.findall(verification_text(plan, subtask_id))
-    return codes[-1].strip() if codes else None
+def verification_command(plan: Plan, subtask_id: str) -> str:
+    """Return a per-subtask ``verify: T1: `command``` entry when present.
+
+    Older single-subtask plans remain compatible: when no matching entry exists, the last
+    inline-code span of the selected verification text is used.
+    """
+    text = verification_text(plan, subtask_id)
+    per_subtask = re.compile(
+        rf"^[ \t]*(?:(?:[-*]|\d+[.])[ \t]+)?verify:[ \t]*{re.escape(subtask_id)}[ \t]*:[ \t]*`([^`\n]+)`",
+        re.I | re.M,
+    )
+    match = per_subtask.search(text)
+    if match:
+        return match.group(1).strip()
+    if len(plan.subtasks) > 1:
+        raise VerificationNotDeclared(
+            f"{subtask_id}: no 'verify: {subtask_id}:' entry; a plan with several subtasks needs one per subtask"
+        )
+    if re.search(r"^[ \t]*(?:(?:[-*]|\d+[.])[ \t]+)?verify:[ \t]*", text, re.I | re.M):
+        raise VerificationNotDeclared(f"{subtask_id}: verification entry has no backticked command")
+    codes = _INLINE_CODE.findall(text)
+    if codes:
+        return codes[-1].strip()
+    raise VerificationNotDeclared(f"{subtask_id}: no verification command declared")
 
 
 def _row(subtask: Subtask) -> str:
