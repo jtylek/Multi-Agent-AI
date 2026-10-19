@@ -233,6 +233,13 @@ Staleness (two independent checks):
   invalid; trust neither file until reconciled.
 - **Stale worker**: `updated` older than about three hours; the worker is unavailable. A
   stale `waiting for user` status means "reservation released", not "failed".
+- **Quota block**: a status with `state: blocked` whose `blockers` value starts with
+  `quota:` records a provider usage limit, for example
+  `quota: claude (claude-opus-5-5), resets 2026-10-19 21:10 Europe/Budapest (reported)` or
+  `quota: codex (gpt-5), reset unknown`. While the reported reset time has not passed, or for
+  24 hours after `updated` when the reset is unknown, the worker is waiting, not stale. A
+  locally configured cap (for example Copilot `--max-ai-credits`) is not provider quota and
+  uses a different blocker prefix, `cap:`.
 - A status `state` that disagrees with the plan row is a conflict to report, not to
   auto-resolve: the plan is authoritative for assignment, the status for the worker's
   progress.
