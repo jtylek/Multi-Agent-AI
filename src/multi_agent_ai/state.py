@@ -41,6 +41,10 @@ class StateRoot:
         return self.path / "tasks"
 
     @property
+    def registry(self) -> Path:
+        return self.path / "registry"
+
+    @property
     def config_path(self) -> Path:
         return self.path / CONFIG_FILE
 
@@ -65,6 +69,7 @@ def init_state_root(project_root: Path | str = ".", state_root: Path | str | Non
     root = resolve_state_root(project_root, state_root)
     root.messages.mkdir(parents=True, exist_ok=True)
     root.tasks.mkdir(parents=True, exist_ok=True)
+    root.registry.mkdir(parents=True, exist_ok=True)
     config = {
         "format": FORMAT,
         "project_root": str(Path(project_root).resolve()),
