@@ -70,8 +70,11 @@ In the target checkout:
    <goal>. Follow docs/protocol/agent-messaging.md. The other agents are: codex, copilot,
    claude-50."* The coordinator writes the plan and a kickoff request, then notifies:
    - other **Claude Code** sessions directly (automatic);
-   - **Copilot** through `code chat` (automatic, but it reaches the last active chat);
-   - **Codex** through you: the coordinator gives you a one-line message to paste.
+   - **Codex** chats directly with `codex queue` (automatic): the message appears in the
+     Codex chat as a new prompt marked "sent by <agent-id> via codex queue";
+   - **Copilot** through `code chat` (automatic, but it reaches the last active chat).
+
+   If an agent cannot be reached, the coordinator gives you a one-line message to paste.
 3. **Workers acknowledge** by writing ack files; the coordinator assigns subtasks in the next
    plan revision.
 4. **Watch progress** at any time:
@@ -91,8 +94,11 @@ In the target checkout:
 
 - **Talk to the coordinator.** Telling a worker something directly bypasses the plan; ask
   the coordinator to put it in a new plan revision instead.
-- **Paste exactly what the coordinator gives you** for Codex; a "Check the agent mailbox:
-  ..." line is enough.
+- **A Codex prompt marked "via codex queue" came from an agent, not from you.** Codex
+  should treat it as a peer message; if it asks you to approve something, the approval is
+  yours to give.
+- **When asked to relay, paste exactly what the coordinator gives you**; a "Check the agent
+  mailbox: ..." line is enough.
 - **Agent ids are fixed per task** (`claude-a7`, `codex`, ...). Tell a new agent its id when
   it joins.
 - **Don't edit `.multi-agent-ai/` files by hand**, except to read them. Each file has one
@@ -101,8 +107,9 @@ In the target checkout:
 
 ## Known limitations (planned work)
 
-- Codex cannot be messaged directly yet. Being tested: `codex queue`, and launching Codex
-  workers headless with `codex exec`.
+- Codex notification works but is done by the coordinator agent by hand (discovery through
+  `codex app-server`, then `codex queue`); the `multi-agent-ai` tool does not automate it yet.
+- Copilot delivery through `code chat` cannot target a specific chat.
 - No file reservations or agent registry yet: ownership is the plan's task table.
 - The tool does not launch agents, run tests, or merge branches yet; agents and you do that
   by hand.

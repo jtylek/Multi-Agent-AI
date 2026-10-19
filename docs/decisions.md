@@ -108,6 +108,16 @@ README section) is the starting point for T6. claude-50 wrote `pyproject.toml`,
 `__init__.py` and `__main__.py`; the author of the rest is unknown (no participating agent
 claims it). T6 brings it in line with D1-D10 on its own task branch; it is not on `main`.
 
+## D14. Codex chats are notified with `codex queue`: Accepted (coordinator), verified with the user, 2026-10-19
+
+Discovery: `thread/list` (by exact `cwd`) on a private `codex app-server --listen stdio://`.
+Delivery: `codex queue --thread <id> --message <one line>`. Verified: a queued message started
+a turn in an idle VS Code Codex chat with no user input (user confirmed), and Codex wrote its
+ack within about 10 seconds. The recipient sees the queued text as if the user typed it, so
+the text only points at the mailbox and names the sender; it never carries instructions or
+approvals. Methods that start, steer or inject turns are not used. The manual user-prompt
+fallback remains for when discovery or queueing fails. Details: docs/protocol/agent-messaging.md.
+
 ## Open
 
 - **O2. Registry.** Format specified (`formats.md` section 6); implementation, reservation
