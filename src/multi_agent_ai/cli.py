@@ -14,6 +14,7 @@ from .notify import format_notify, notify_message
 from .reachability import discover_agents
 from .registry import reservation_conflicts, read_registry
 from .report import format_text, index_entries, scan, to_dict
+from . import workspace_cli
 from .state import StateIndex, init_state_root, read_config, resolve_state_root
 
 
@@ -61,6 +62,7 @@ def _parser() -> argparse.ArgumentParser:
                         help="state root, absolute or relative to the project root (default: .multi-agent-ai)")
     doctor.add_argument("--json", action="store_true", help="machine-readable output")
     _add_worker_parser(sub)
+    workspace_cli.add_parser(sub)
     return parser
 
 
@@ -79,6 +81,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             sys.stdout.write(doctor.format_text(checks))
         return doctor.exit_code(checks)
+    if args.command == "workspace":  # T23: see workspace_cli.py
+        return workspace_cli.main(args)
     if args.command == "worker":  # T12 block: see _add_worker_parser / _worker_main below
         return _worker_main(args)
     project_root = resolve_state_root(args.project_root).path.parent
