@@ -103,6 +103,10 @@ CREATE TABLE IF NOT EXISTS seen_revisions (
     task_id TEXT PRIMARY KEY,
     revision INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS attempt_details (
+    attempt_id TEXT PRIMARY KEY,
+    payload TEXT NOT NULL
+);
 """
 
 
@@ -155,6 +159,25 @@ class StateIndex:
             "SELECT payload FROM records WHERE entity_type = ? ORDER BY id", (record_type.__name__,)
         ).fetchall()
         return [_decode(record_type, row[0]) for row in rows]
+
+    # worker attempt details (mode, subtask, usage, timings; next to the Attempt record) ----
+
+    def save_attempt_details(self, attempt_id: str, details: dict[str, Any]) -> None:
+        with self.connection:
+            self.connection.execute(
+                "INSERT OR REPLACE INTO attempt_details (attempt_id, payload) VALUES (?, ?)",
+                (attempt_id, json.dumps(details, sort_keys=True)),
+            )
+
+    def attempt_details(self, attempt_id: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "SELECT payload FROM attempt_details WHERE attempt_id = ?", (attempt_id,)
+        ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def all_attempt_details(self) -> dict[str, dict[str, Any]]:
+        rows = self.connection.execute("SELECT attempt_id, payload FROM attempt_details ORDER BY attempt_id")
+        return {attempt_id: json.loads(payload) for attempt_id, payload in rows}
 
     # protocol file index -----------------------------------------------------------
 

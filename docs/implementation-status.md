@@ -34,14 +34,37 @@ listed below is planned, not implemented.
     messages with per-recipient ack state, tasks with plan revision and subtask states, and
     staleness/conflict findings. It creates no file; an existing index is opened read-only.
   - `index`: rebuilds the derived index and reports plan revisions lower than one seen.
+  - `worker run --provider codex|copilot --task T --subtask S --agent-id ID --mode
+    review|implement --worktree ABS [--model M] [--timeout S] [--commit SHA]
+    [--verify-command C] [--live-branch B]... [--pass-env NAME]...`: one managed headless
+    worker attempt (T12; see "Managed workers" in
+    [protocol/agent-messaging.md](protocol/agent-messaging.md)). Exit 0 on success, 1 on a
+    classified failure, 2 when rejected before an attempt exists.
+- Windows process runtime (`winproc.py`): executable resolution (`.exe` > `.cmd`/`.bat`, never
+  `.ps1`; npm shims run as `node.exe <script>`), argv without a shell, refusal of arguments
+  `cmd.exe` would alter, stdout/stderr streamed to files, timeout with process-tree kill via a
+  Job Object (`taskkill /T /F` fallback), allowlisted environment.
+- Managed workers (`workers/`): Codex adapter (`codex exec`, sandbox `read-only` /
+  `workspace-write`, prompt on stdin) and Copilot adapter (`copilot -p`, tool profiles from T13
+  as data in `workers/copilot.py`); deterministic prompt builder; table-driven failure
+  classification; orchestrator-side Git checks and commit; status/review files; `runs/`
+  layout; attempts in the SQLite index (`Attempt` record plus an `attempt_details` table for
+  mode, usage and timings). Tested only with fake executables; **no real provider run has been
+  made yet** (planned after integration, with the user's OK).
 - Tests in `tests/` cover every valid and invalid example in formats.md, plus the D8 rule
   that exit codes and notification transport never create an ack or a completion.
 
 ## Not implemented
 
 Registry (`registry/`, O2) and reservation checks; review-file parsing; message cleanup and
-bounded watches (formats.md section 7); provider adapters, process launching, notification
-transport; Git/worktree management; verification and routing; VS Code integration.
+bounded watches (formats.md section 7); Claude Code worker adapter; OS-level isolation of
+workers (filesystem/network); creating worktrees; verification and routing; VS Code
+integration.
+
+Unverified until the first real run: Copilot's matching of `shell(<verification command>)`,
+prompt mode without `--allow-all-tools` when tools are used, Copilot's JSONL event schema
+(final message extraction is defensive) and `usage.json` fields; Codex's `--json` usage
+event shape (tokens are taken from any `usage` object with integer `*token*` fields).
 
 ## Interpretations
 
@@ -77,3 +100,55 @@ Where formats.md left room, the implementation chose the conservative reading:
     root must be passed with `--state-root`; project profiles that remember it are later work.
 11. **Status timestamps.** Date-only `updated` values are accepted with a warning and are never
     evaluated for staleness; writers require `YYYY-MM-DD HH:MM`.
+
+Managed workers (T12):
+
+12. **Prompt delivery.** Codex reads the prompt from stdin (`-`), which `codex exec --help`
+    documents; "stdin closed" therefore means stdin is the prompt file (EOF at its end) or
+    `NUL`, never interactive. Copilot documents no stdin/file prompt for `-p`, so the prompt is
+    an argv element; it is safe because npm shims are run as `node.exe <script>`. A prompt that
+    would have to pass through a non-npm `.cmd` is refused (`invalid_arguments`), as is a
+    command line over 32,000 characters.
+13. **Ref checks in a shared repository.** All worktrees share refs and other agents commit
+    concurrently, so only the worktree's own HEAD, branch and branch tip, and a new ref pointing
+    at the worktree's pre-run HEAD, count as the worker's Git operation
+    (`git_policy_violation`, a class added to the list in the plan). Other ref changes and a
+    changed primary-checkout HEAD are recorded in `result.json` as unattributed observations.
+    A push is only visible locally through such ref changes.
+14. **Byte-for-byte review check.** Compared: `git status --porcelain=v1 -z
+    --untracked-files=all`, a SHA-256 of every listed path, HEAD and branch. Ignored files
+    (caches, build output) are excluded; files outside the worktree are not seen.
+15. **Implement branch.** Implement mode requires the protocol's branch name
+    `task/<task-id>/<subtask-id>` (besides refusing `main`, `master`, `--live-branch` values,
+    the primary checkout and a dirty tree). There is no project profile yet, so extra live
+    branches are passed with `--live-branch`.
+16. **Commits.** The orchestrator commits with the repository's configured identity, runs
+    hooks (never `--no-verify`), and verifies the new commit's parent; a hook rejection is
+    `commit_failed` (a class added to the list in the plan). Changes of a failed implement run
+    are left uncommitted in the worktree for inspection, so the next run is refused until
+    someone cleans it.
+17. **Status states.** Success writes `review` in both modes (implement: committed, awaiting
+    review; review: review written). Failures write `blocked`. `tests` says the orchestrator
+    ran none and points at the worker's report; `last-commit` is the orchestrator's commit or
+    `none`. A managed worker's status body starts with `Managed worker: provider=<p>`; that line
+    is how a re-run of the same worker is told apart from an interactive agent with the same id
+    (`render_status` writes no extra header keys, so a body marker was used).
+18. **Review file.** formats.md has no grammar for review files; the runner writes a header
+    block (keys listed under "Managed workers"), one blank line, and the final message
+    byte-for-byte (no newline normalisation, no added final newline). It is written only when
+    the run succeeded; it is replaced only if its `agent` header is the same worker.
+19. **Plan errors.** A plan whose header parses and whose requested row is valid is usable;
+    errors in other rows (the live plan has state cells such as `merged (1f8ecbb)`) are
+    recorded as findings, not fatal.
+20. **Verification command.** Taken as the last inline-code span of the subtask's
+    verification text (for "`a` then `b` then `c`", `c`); `--verify-command` overrides. For
+    Copilot it becomes exactly `shell(<command>)` (narrowest form); a command containing `(`,
+    `)`, `,` or a newline cannot be a pattern, and the profile is then unconfigured.
+21. **Attempt storage.** The existing `Attempt` record is stored with `task_id` = subtask id;
+    task, mode, profile, usage, duration and run directory go to a new `attempt_details`
+    table in the same derived index (the `Attempt` dataclass was left unchanged).
+22. **Process tree.** A Job Object with kill-on-close: descendants still running when the
+    worker exits normally are killed too.
+23. **Environment.** Proxy variables are passed (a proxy URL can embed credentials); API keys
+    and tokens (`OPENAI_API_KEY`, `GH_TOKEN`, ...) only with `--pass-env`, which cannot pass
+    `COPILOT_ALLOW_ALL`. Codex and Copilot normally authenticate from their own stored login.

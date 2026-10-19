@@ -130,9 +130,11 @@ Windows implementation must correctly resolve `.exe`, `.cmd`, and `.bat` entrypo
 The first package (milestone M0) implements the protocol/state foundation only: typed models,
 a parser and writer for the coordination files in [docs/protocol/formats.md](docs/protocol/formats.md),
 a configurable state root with a derived SQLite index, and a small CLI. It needs Python 3.11+
-and uses only the standard library at runtime. Agent execution, provider adapters, routing,
-the registry and the VS Code integration are not implemented yet; see
-[docs/implementation-status.md](docs/implementation-status.md).
+and uses only the standard library at runtime. It can also launch one **managed headless
+worker** (`codex exec` or `copilot -p`) for a plan subtask with least-privilege profiles,
+classify the outcome, and record status, review and attempt data; this has been tested with
+fake executables only. Routing, the registry and the VS Code integration are not implemented
+yet; see [docs/implementation-status.md](docs/implementation-status.md).
 
 ```powershell
 py -3.12 -m venv .venv
@@ -141,6 +143,10 @@ py -3.12 -m venv .venv
 
 .venv\Scripts\multi-agent-ai init --project-root <target-project>
 .venv\Scripts\multi-agent-ai inspect --project-root <target-project>
+
+# one read-only review by a managed Codex worker (uses provider quota)
+.venv\Scripts\multi-agent-ai worker run --project-root <target-project> --provider codex `
+    --task <task-id> --subtask <id> --agent-id codex-w1 --mode review --worktree <abs worktree>
 ```
 
 The state root defaults to `.multi-agent-ai/` in the target project's primary checkout; pass
