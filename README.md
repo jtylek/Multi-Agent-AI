@@ -50,6 +50,27 @@ Developer approval before changing main / pushing
 
 The coordinator is a **role**, not a hard-coded vendor. Exactly one coordinator owns each job. A user can transfer that role explicitly. The Python service handles process management, scheduling, state, and Git; AI handles planning, implementation, and reviews where reasoning adds value.
 
+## When multi-agent work pays off
+
+Multi-agent work is not automatically more efficient than a single agent. It costs more tokens in total (every agent is briefed cold, and plans, mailbox files, status files and reviews are overhead). What it buys is wall-clock time through parallel work, independent review that finds bugs the author's tests missed, smaller per-agent contexts, and cheaper routing of mechanical work. These are observations from the first field trials, not measurements: the performance ledger that will quantify them is still planned.
+
+Best suited:
+
+- Work that splits into three or more subtasks with disjoint files, so each file has one writer.
+- Work with explicit acceptance criteria and exact verification commands, so "done" can be checked.
+- Medium to large jobs (hours rather than minutes), where the briefing overhead is small compared with the work.
+- Risky changes that benefit from a second, different reviewer who runs the tests: shared infrastructure, security, migrations, ports of legacy behavior.
+- Mixed workloads with a few hard tasks and many mechanical ones, where cheap-model-first routing saves quota.
+
+Poorly suited (use a single agent):
+
+- Small or ordinary changes that one agent finishes in a few tool calls.
+- Tightly coupled work in one file or one design, where parallel writers conflict.
+- Exploratory work whose design is still changing, so the plan goes stale between agents.
+- Quick bug fixes where one agent already holds the context.
+
+Rule of thumb: use several agents when a job has several independent parts and a missed bug is expensive. Do not make performance claims without a stated method and baseline; once the ledger exists, compare single-agent and multi-agent runs of the same job.
+
 ## Routing and token efficiency
 
 A planned routing policy evaluates:
