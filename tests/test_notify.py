@@ -6,8 +6,8 @@ from pathlib import Path
 
 from multi_agent_ai.mailbox import write_request
 from multi_agent_ai.models import Request, Notification
-from multi_agent_ai.notify import notify_message
-from multi_agent_ai.state import StateIndex
+from multi_agent_ai.notify import NotifyResult, notify_message
+from multi_agent_ai.state import StateIndex, init_state_root
 
 
 def _status(root: Path, agent: str, contact: str) -> None:
@@ -23,6 +23,7 @@ def _status(root: Path, agent: str, contact: str) -> None:
 
 def test_notify_sends_only_pointer_and_never_ack(tmp_path, monkeypatch):
     root = tmp_path / ".multi-agent-ai"
+    init_state_root(tmp_path, root)
     write_request(root, Request("m1", "lead", ("codex", "claude", "copilot", "unknown"), "Do work."), "lead")
     _status(root, "codex", "codex queue --thread thread-123")
     _status(root, "claude", "claude SendMessage multi-agent-ai-a7")
@@ -37,11 +38,11 @@ def test_notify_sends_only_pointer_and_never_ack(tmp_path, monkeypatch):
     results = notify_message(root, "m1", tmp_path, runner=runner)
     assert [item.recipient for item in results] == ["codex", "claude", "copilot", "unknown"]
     assert results[0].submitted and results[0].method == "codex queue"
-    assert results[1].method == "claude target" and not results[1].submitted
+    assert results[1].method == "manual" and not results[1].submitted
     assert results[2].submitted and results[2].method == "code chat"
     assert results[3].method == "manual"
     assert len(calls) == 2
-    assert calls[0][0][0:4] == ["codex.cmd", "queue", "--thread", "thread-123"]
+    assert calls[0][0][0:3] == ["codex.cmd", "queue", "--thread=thread-123"]
     assert "Check the agent mailbox" in calls[0][0][-1]
     assert calls[1][0][0:3] == ["code.cmd", "chat", "--reuse-window"]
     assert not (root / "messages" / "m1" / "ack-codex.md").exists()
@@ -62,3 +63,33 @@ def test_notify_rejects_invalid_request(tmp_path):
         assert "unreadable request" in str(exc)
     else:
         raise AssertionError("invalid request was accepted")
+
+
+def test_notify_records_failed_and_manual_without_creating_ack(tmp_path, monkeypatch):
+    root = tmp_path / ".multi-agent-ai"
+    write_request(root, Request("m2", "lead", ("codex", "bad"), "Do work."), "lead")
+    _status(root, "codex", "codex queue --thread --message evil")
+    _status(root, "bad", "provider unsupported")
+
+    def failed_runner(command, cwd, timeout):
+        return subprocess.CompletedProcess(command, 7, stdout="", stderr="rejected")
+
+    monkeypatch.setattr("multi_agent_ai.notify.resolve_executable", lambda name: f"{name}.cmd")
+    results = notify_message(root, "m2", tmp_path, runner=failed_runner)
+    assert [item.method for item in results] == ["manual", "manual"]
+    assert all(not item.submitted for item in results)
+    assert not (root / "state.sqlite3").exists()
+    assert not (root / "messages" / "m2" / "ack-codex.md").exists()
+
+
+def test_notify_cli_exit_codes(monkeypatch, tmp_path, capsys):
+    from multi_agent_ai.cli import main
+
+    init_state_root(tmp_path)
+    monkeypatch.setattr("multi_agent_ai.cli.notify_message", lambda *args, **kwargs: (NotifyResult("a", "codex queue", True, "ok"),))
+    assert main(["notify", "m", "--project-root", str(tmp_path)]) == 0
+    monkeypatch.setattr("multi_agent_ai.cli.notify_message", lambda *args, **kwargs: (NotifyResult("a", "manual", False, "relay"),))
+    assert main(["notify", "m", "--project-root", str(tmp_path)]) == 3
+    monkeypatch.setattr("multi_agent_ai.cli.notify_message", lambda *args, **kwargs: (NotifyResult("a", "codex queue", False, "failed"),))
+    assert main(["notify", "m", "--project-root", str(tmp_path)]) == 1
+    capsys.readouterr()

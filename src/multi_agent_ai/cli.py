@@ -106,7 +106,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps([item.as_dict() for item in results], indent=2, ensure_ascii=False))
         else:
             sys.stdout.write(format_notify(results))
-        return 0 if all(item.submitted or item.method == "manual" or item.method == "claude target" for item in results) else 1
+        if all(item.submitted for item in results):
+            return 0
+        if any(item.method in {"manual", "claude target"} for item in results):
+            return 3
+        return 1
 
     # index
     if not root.database_path.is_file():

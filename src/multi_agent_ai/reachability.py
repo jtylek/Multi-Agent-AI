@@ -7,6 +7,7 @@ import queue
 import shutil
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -71,7 +72,8 @@ def _same_cwd(value: object, project_root: Path) -> bool:
 def _run_json(command: Sequence[str], cwd: Path, timeout: float) -> Any:
     try:
         result = subprocess.run(
-            list(command), cwd=str(cwd), capture_output=True, text=True, timeout=timeout, check=False
+            list(command), cwd=str(cwd), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=timeout, check=False
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ReachabilityError(f"{' '.join(command[:2])}: {exc}") from exc
@@ -135,6 +137,8 @@ def _query_codex_app_server(project_root: Path, timeout: float) -> list[dict[str
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
         )
     except OSError as exc:
@@ -152,15 +156,20 @@ def _query_codex_app_server(project_root: Path, timeout: float) -> list[dict[str
     def response(request_id: int) -> dict[str, Any]:
         # Queue.get uses a monotonic timeout; a single bounded wait is enough because the
         # app-server returns one response for each request and notifications are ignored.
-        try:
-            item = output.get(timeout=timeout)
-        except queue.Empty as exc:
-            raise ReachabilityError(f"codex app-server timed out waiting for request {request_id}") from exc
-        if item.get("id") == request_id:
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ReachabilityError(f"codex app-server timed out waiting for request {request_id}")
+            try:
+                item = output.get(timeout=remaining)
+            except queue.Empty as exc:
+                raise ReachabilityError(f"codex app-server timed out waiting for request {request_id}") from exc
+            if item.get("id") != request_id:
+                continue
             if "error" in item:
                 raise ReachabilityError(f"codex app-server request {request_id} failed: {item['error']}")
             return item
-        return response(request_id)
 
     try:
         send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {

@@ -7,6 +7,7 @@ task-completion state; only the recipient's mailbox file can do that (D8).
 from __future__ import annotations
 
 import re
+import sqlite3
 import subprocess
 import uuid
 from dataclasses import dataclass, asdict
@@ -55,22 +56,26 @@ def _pointer(request_path: Path, sender: str, transport: str) -> str:
 
 
 def _run(command: Sequence[str], cwd: Path, timeout: float) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(list(command), cwd=str(cwd), capture_output=True, text=True, timeout=timeout, check=False)
+    return subprocess.run(list(command), cwd=str(cwd), capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=timeout, check=False)
 
 
 def _record_transport(state_root: Path, result: NotifyResult, message_id: str) -> None:
     """Persist transport telemetry only in the derived SQLite index."""
+    database = state_root / "state.sqlite3"
+    if not database.is_file():
+        return
     try:
-        with StateIndex.open(state_root / "state.sqlite3") as index:
+        with StateIndex.open(database) as index:
             index.save(Notification(
                 id=f"notify-{uuid.uuid4().hex}",
                 message_id=message_id,
                 recipient_id=result.recipient,
                 reachability_mode=result.method,
-                transport_result="submitted" if result.submitted else result.method,
-                manual_relay_text=result.detail if result.method == "manual" else None,
+                transport_result="submitted" if result.submitted else ("manual" if result.method in {"manual", "claude target"} else "failed"),
+                manual_relay_text=None if result.submitted else result.detail,
             ))
-    except OSError:
+    except (OSError, sqlite3.Error):
         # Notification must not fail merely because the optional derived ledger is absent or
         # unavailable. The transport result is still printed; mailbox files remain untouched.
         return
@@ -81,11 +86,13 @@ def _send_codex(contact: str, request_path: Path, sender: str, cwd: Path, timeou
     match = _CODEX_CONTACT.fullmatch(contact.strip())
     if not match:
         return NotifyResult("", "manual", False, f"unsupported Codex contact: {contact}")
-    thread = match.group(1).strip().strip('"')
+    thread = match.group(1).strip()
+    if thread.startswith("-") or not thread:
+        return NotifyResult("", "manual", False, f"unsupported Codex contact: {contact}")
     pointer = _pointer(request_path, sender, "codex queue")
     try:
         executable = resolve_executable("codex")
-        result = runner((executable, "queue", "--thread", thread, "--message", pointer), cwd, timeout)
+        result = runner((executable, "queue", f"--thread={thread}", "--message", pointer), cwd, timeout)
     except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
         return NotifyResult("", "codex queue", False, str(exc))
     if result.returncode == 0:
@@ -137,8 +144,8 @@ def notify_message(
             result = NotifyResult(recipient, result.method, result.submitted, result.detail)
         else:
             result = NotifyResult(
-                recipient, "claude target", False,
-                f"{_pointer(request_path, request.value.sender, 'manual relay')} target={contact}",
+                recipient, "manual", False,
+                f"{_pointer(request_path, request.value.sender, 'manual relay')} unsupported contact target={contact}",
             )
         _record_transport(state_root, result, message_id)
         results.append(result)
