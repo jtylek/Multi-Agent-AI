@@ -36,8 +36,9 @@ listed below is planned, not implemented.
   - `index`: rebuilds the derived index and reports plan revisions lower than one seen.
 - Read-only reachability discovery (`reachability.py` and `agents`): exact-project-cwd Claude
   sessions and Codex app-server threads, with provider errors reported separately.
-- Notification transport (`notify.py` and `notify`): sends mailbox pointers through configured
-  Codex/Copilot contacts and reports Claude/manual relay targets; transport is never an ack.
+- Notification transport (`notify.py` and `notify`): dry-run by default; with explicit `--send`,
+  sends mailbox pointers through configured Codex/Copilot contacts and reports Claude/manual relay
+  targets. Transport is never an ack.
 - Tests in `tests/` cover every valid and invalid example in formats.md, plus the D8 rule
   that exit codes and notification transport never create an ack or a completion.
 

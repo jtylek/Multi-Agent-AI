@@ -35,10 +35,10 @@ def test_notify_sends_only_pointer_and_never_ack(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(command, 0, stdout="accepted", stderr="")
 
     monkeypatch.setattr("multi_agent_ai.notify.resolve_executable", lambda name: f"{name}.cmd")
-    results = notify_message(root, "m1", tmp_path, runner=runner)
+    results = notify_message(root, "m1", tmp_path, runner=runner, send=True)
     assert [item.recipient for item in results] == ["codex", "claude", "copilot", "unknown"]
     assert results[0].submitted and results[0].method == "codex queue"
-    assert results[1].method == "manual" and not results[1].submitted
+    assert results[1].method == "manual (claude)" and not results[1].submitted
     assert results[2].submitted and results[2].method == "code chat"
     assert results[3].method == "manual"
     assert len(calls) == 2
@@ -65,6 +65,21 @@ def test_notify_rejects_invalid_request(tmp_path):
         raise AssertionError("invalid request was accepted")
 
 
+def test_notify_defaults_to_dry_run(tmp_path, monkeypatch):
+    root = tmp_path / ".multi-agent-ai"
+    write_request(root, Request("dry", "lead", ("codex",), "Do work."), "lead")
+    _status(root, "codex", "codex queue --thread thread-123")
+
+    def should_not_run(*args, **kwargs):
+        raise AssertionError("dry-run invoked a transport")
+
+    monkeypatch.setattr("multi_agent_ai.notify.resolve_executable", should_not_run)
+    results = notify_message(root, "dry", tmp_path)
+    assert results[0].method == "dry-run"
+    assert "would send" in results[0].detail
+    assert not (root / "state.sqlite3").exists()
+
+
 def test_notify_records_failed_and_manual_without_creating_ack(tmp_path, monkeypatch):
     root = tmp_path / ".multi-agent-ai"
     write_request(root, Request("m2", "lead", ("codex", "bad"), "Do work."), "lead")
@@ -75,7 +90,7 @@ def test_notify_records_failed_and_manual_without_creating_ack(tmp_path, monkeyp
         return subprocess.CompletedProcess(command, 7, stdout="", stderr="rejected")
 
     monkeypatch.setattr("multi_agent_ai.notify.resolve_executable", lambda name: f"{name}.cmd")
-    results = notify_message(root, "m2", tmp_path, runner=failed_runner)
+    results = notify_message(root, "m2", tmp_path, runner=failed_runner, send=True)
     assert [item.method for item in results] == ["manual", "manual"]
     assert all(not item.submitted for item in results)
     assert not (root / "state.sqlite3").exists()
@@ -87,9 +102,9 @@ def test_notify_cli_exit_codes(monkeypatch, tmp_path, capsys):
 
     init_state_root(tmp_path)
     monkeypatch.setattr("multi_agent_ai.cli.notify_message", lambda *args, **kwargs: (NotifyResult("a", "codex queue", True, "ok"),))
-    assert main(["notify", "m", "--project-root", str(tmp_path)]) == 0
+    assert main(["notify", "m", "--project-root", str(tmp_path), "--send"]) == 0
     monkeypatch.setattr("multi_agent_ai.cli.notify_message", lambda *args, **kwargs: (NotifyResult("a", "manual", False, "relay"),))
-    assert main(["notify", "m", "--project-root", str(tmp_path)]) == 3
+    assert main(["notify", "m", "--project-root", str(tmp_path), "--send"]) == 3
     monkeypatch.setattr("multi_agent_ai.cli.notify_message", lambda *args, **kwargs: (NotifyResult("a", "codex queue", False, "failed"),))
-    assert main(["notify", "m", "--project-root", str(tmp_path)]) == 1
+    assert main(["notify", "m", "--project-root", str(tmp_path), "--send"]) == 1
     capsys.readouterr()

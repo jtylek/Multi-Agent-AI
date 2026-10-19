@@ -44,6 +44,7 @@ def _parser() -> argparse.ArgumentParser:
         if name == "notify":
             cmd.add_argument("message_id", help="durable mailbox message id")
             cmd.add_argument("--timeout", type=float, default=15, help="transport timeout in seconds")
+            cmd.add_argument("--send", action="store_true", help="send notifications (default is dry-run)")
         if name == "inspect":
             cmd.add_argument("--now", help="evaluate staleness at this local time (YYYY-MM-DD HH:MM)")
     return parser
@@ -98,17 +99,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"state root not found: {root.path}", file=sys.stderr)
             return 2
         try:
-            results = notify_message(root.path, args.message_id, project_root, timeout=args.timeout)
+            results = notify_message(root.path, args.message_id, project_root, timeout=args.timeout, send=args.send)
         except (OSError, ValueError) as exc:
             print(str(exc), file=sys.stderr)
             return 2
+        if args.send and not root.database_path.is_file():
+            print("no index: transport results not recorded (run init)", file=sys.stderr)
         if args.json:
             print(json.dumps([item.as_dict() for item in results], indent=2, ensure_ascii=False))
         else:
             sys.stdout.write(format_notify(results))
+        if not args.send:
+            return 0
         if all(item.submitted for item in results):
             return 0
-        if any(item.method in {"manual", "claude target"} for item in results):
+        if any(item.method in {"manual", "manual (claude)"} for item in results):
             return 3
         return 1
 

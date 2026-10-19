@@ -72,7 +72,7 @@ def _record_transport(state_root: Path, result: NotifyResult, message_id: str) -
                 message_id=message_id,
                 recipient_id=result.recipient,
                 reachability_mode=result.method,
-                transport_result="submitted" if result.submitted else ("manual" if result.method in {"manual", "claude target"} else "failed"),
+                transport_result="submitted" if result.submitted else ("manual" if result.method.startswith("manual") else "failed"),
                 manual_relay_text=None if result.submitted else result.detail,
             ))
     except (OSError, sqlite3.Error):
@@ -85,10 +85,10 @@ def _send_codex(contact: str, request_path: Path, sender: str, cwd: Path, timeou
                 runner: Callable[[Sequence[str], Path, float], subprocess.CompletedProcess[str]]) -> NotifyResult:
     match = _CODEX_CONTACT.fullmatch(contact.strip())
     if not match:
-        return NotifyResult("", "manual", False, f"unsupported Codex contact: {contact}")
+        return NotifyResult("", "manual", False, f"{_pointer(request_path, sender, 'manual relay')} unsupported Codex contact: {contact}")
     thread = match.group(1).strip()
     if thread.startswith("-") or not thread:
-        return NotifyResult("", "manual", False, f"unsupported Codex contact: {contact}")
+        return NotifyResult("", "manual", False, f"{_pointer(request_path, sender, 'manual relay')} unsupported Codex contact: {contact}")
     pointer = _pointer(request_path, sender, "codex queue")
     try:
         executable = resolve_executable("codex")
@@ -120,6 +120,7 @@ def notify_message(
     project_root: Path,
     *,
     timeout: float = 15,
+    send: bool = False,
     runner: Callable[[Sequence[str], Path, float], subprocess.CompletedProcess[str]] = _run,
 ) -> tuple[NotifyResult, ...]:
     message_dir = state_root / "messages" / message_id
@@ -137,17 +138,30 @@ def notify_message(
                 _pointer(request_path, request.value.sender, "manual relay"),
             )
         elif _CODEX_CONTACT.fullmatch(contact.strip()):
-            result = _send_codex(contact, request_path, request.value.sender, project_root, timeout, runner)
+            if send:
+                result = _send_codex(contact, request_path, request.value.sender, project_root, timeout, runner)
+            else:
+                result = NotifyResult("", "dry-run", False, f"would send via {contact}: {_pointer(request_path, request.value.sender, 'codex queue')}")
             result = NotifyResult(recipient, result.method, result.submitted, result.detail)
         elif contact.strip().lower().startswith("code chat"):
-            result = _send_copilot(contact, request_path, request.value.sender, project_root, timeout, runner)
+            if send:
+                result = _send_copilot(contact, request_path, request.value.sender, project_root, timeout, runner)
+            else:
+                result = NotifyResult("", "dry-run", False, f"would send via {contact}: {_pointer(request_path, request.value.sender, 'code chat')}")
             result = NotifyResult(recipient, result.method, result.submitted, result.detail)
+        elif contact.strip().lower().startswith("claude "):
+            target = contact.strip()[len("claude "):].strip()
+            result = NotifyResult(
+                recipient, "manual (claude)", False,
+                f"{_pointer(request_path, request.value.sender, 'manual relay')} SendMessage target={target}",
+            )
         else:
             result = NotifyResult(
                 recipient, "manual", False,
                 f"{_pointer(request_path, request.value.sender, 'manual relay')} unsupported contact target={contact}",
             )
-        _record_transport(state_root, result, message_id)
+        if send:
+            _record_transport(state_root, result, message_id)
         results.append(result)
     return tuple(results)
 

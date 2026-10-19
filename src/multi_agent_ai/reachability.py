@@ -147,6 +147,7 @@ def _query_codex_app_server(project_root: Path, timeout: float) -> list[dict[str
         process.kill()
         raise ReachabilityError("codex app-server did not expose stdio")
     output: queue.Queue[dict[str, Any]] = queue.Queue()
+    deadline = time.monotonic() + timeout
     threading.Thread(target=_read_rpc_lines, args=(process.stdout, output), daemon=True).start()
 
     def send(message: dict[str, Any]) -> None:
@@ -156,7 +157,6 @@ def _query_codex_app_server(project_root: Path, timeout: float) -> list[dict[str
     def response(request_id: int) -> dict[str, Any]:
         # Queue.get uses a monotonic timeout; a single bounded wait is enough because the
         # app-server returns one response for each request and notifications are ignored.
-        deadline = time.monotonic() + timeout
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
