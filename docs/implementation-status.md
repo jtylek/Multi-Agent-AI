@@ -39,6 +39,13 @@ listed below is planned, not implemented.
 - Notification transport (`notify.py` and `notify`): dry-run by default; with explicit `--send`,
   sends mailbox pointers through configured Codex/Copilot contacts and reports Claude/manual relay
   targets. Transport is never an ack.
+- CLI `doctor [--project-root P] [--state-root S] [--json]` (T20, `doctor.py`): read-only
+  readiness report with a plain-language fix for each problem: Python >= 3.11, Git and the
+  project repository, each provider CLI (Codex, Copilot, Claude Code: found on PATH, version via
+  its own `--version`), the state root and index, and time zone data. It runs nothing else,
+  writes nothing and never calls a provider, so sign-in is always reported as `not checked`.
+  Statuses: `ok`, `warn`, `fail`, `not checked`; a missing CLI is a warning unless none is
+  installed; exit 1 only when a check fails.
 - CLI `worker run --provider codex|copilot --task T --subtask S --agent-id ID --mode
   review|implement --worktree ABS [--model M] [--timeout S] [--commit SHA]
   [--verify-command C] [--live-branch B]... [--pass-env NAME]... [--execute]`: one managed
@@ -61,12 +68,21 @@ listed below is planned, not implemented.
   `quota_exhausted`, `cap_reached`, `provider_error`; detector tables (Codex structured events;
   Claude and Copilot patterns are synthetic until real samples exist; **quota detection becomes
   active only once a provider's CLI version is positively known and listed in the detector
-  table. No table lists a version yet and the runner never probes the version (a probe could use
-  quota), so today every limit signature is reported as `provider_error` with the raw output**), reported-only reset
+  table. The runner reads the version from the CLI's own `--version` (T18) but no table lists a
+  version yet, so today every limit signature is reported as `provider_error` with the raw
+  output**), reported-only reset
   parsing, `quota:`/`cap:` blocker in the worker status, suspended stale-worker rule, a `limit`
   record with the resume command. Not implemented: WIP `checkpoint:` commits, automatic
-  linked resume attempts, a CLI version probe (the detector version check is exercised in unit
-  tests only). Tested only with fake executables; **no real provider run has been
+  linked resume attempts. CLI version detection (T18, `workers/versions.py`): `<cli> --version`
+  is a local flag (no sign-in, no provider call, so no quota; bounded by a 15 s timeout, no shell,
+  closed stdin, process-tree kill, same allowlisted environment), run once per `worker run
+  --execute` after the command is resolved; the parsed `x.y.z` and the raw text are recorded in
+  `result.json` (`cli_version`) and the SQLite attempt details; a failed or unparseable probe is
+  recorded as unknown and never blocks the run; a dry run does not probe. The parser takes the
+  first `x.y.z` and tolerates a trailing period and extra lines (real outputs: `codex-cli 0.163.0`;
+  `GitHub Copilot CLI 1.0.98.` followed by `Run 'copilot update' to check for updates.`;
+  `2.1.301 (Claude Code)`). That Copilot line suggests the CLI may check for updates, which is
+  network traffic but not model quota. Tested only with fake executables; **no real provider run has been
   made yet** (planned after integration, with the user's OK).
 - Tests in `tests/` cover every valid and invalid example in formats.md, plus the D8 rule
   that exit codes and notification transport never create an ack or a completion.

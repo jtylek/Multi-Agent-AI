@@ -1,4 +1,4 @@
-"""Command line: ``multi-agent-ai init | inspect | index | worker run`` (also ``python -m multi_agent_ai``)."""
+"""Command line: ``multi-agent-ai init | inspect | index | doctor | worker run`` (also ``python -m multi_agent_ai``)."""
 
 from __future__ import annotations
 
@@ -47,6 +47,13 @@ def _parser() -> argparse.ArgumentParser:
             cmd.add_argument("--send", action="store_true", help="send notifications (default is dry-run)")
         if name == "inspect":
             cmd.add_argument("--now", help="evaluate staleness at this local time (YYYY-MM-DD HH:MM)")
+    doctor = sub.add_parser("doctor", help="check this machine is ready (read-only; runs only --version)",
+                            description="Read-only readiness checks: Python, Git, the provider CLIs (found, version; "
+                                        "sign-in is not checked because that needs the provider), the state root.")
+    doctor.add_argument("--project-root", default=".", help="primary checkout (default: current directory)")
+    doctor.add_argument("--state-root", default=None,
+                        help="state root, absolute or relative to the project root (default: .multi-agent-ai)")
+    doctor.add_argument("--json", action="store_true", help="machine-readable output")
     _add_worker_parser(sub)
     return parser
 
@@ -55,6 +62,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="backslashreplace")
     args = _parser().parse_args(argv)
+    if args.command == "doctor":
+        from pathlib import Path
+
+        from . import doctor
+
+        checks = doctor.run_doctor(Path(args.project_root).resolve(), resolve_state_root(args.project_root, args.state_root))
+        if args.json:
+            print(json.dumps(doctor.to_dict(checks), indent=2, ensure_ascii=False))
+        else:
+            sys.stdout.write(doctor.format_text(checks))
+        return doctor.exit_code(checks)
     if args.command == "worker":  # T12 block: see _add_worker_parser / _worker_main below
         return _worker_main(args)
     project_root = resolve_state_root(args.project_root).path.parent

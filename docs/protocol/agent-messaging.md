@@ -375,9 +375,10 @@ exit, a bare 429 or a missing usage file alone is never quota evidence):
 Copilot `--max-ai-credits`) and `provider_error` (throttling or a generic API error, e.g. a bare
 429). Detector tables live in `workers/quota.py`; the Claude and Copilot patterns and the Codex
 event shape are synthetic until a real sample is recorded, and a CLI version a table does not
-list, or an unknown one (no version probe is run, because it could use quota; today every real
-run), falls back to `provider_error` with the raw output, so quota verdicts become active only
-once a provider's CLI version is positively known and in the table. The reset time is only what the provider
+list, or an unknown one (the runner reads it from the CLI's own `--version`, a local flag that
+uses no quota; a failed probe leaves it unknown), falls back to `provider_error` with the raw
+output, so quota verdicts become active only once a provider's CLI version is positively known
+and in the table. The version is recorded with every attempt. The reset time is only what the provider
 reports (epoch field, or a wall-clock time plus zone resolved with `zoneinfo`; a time earlier
 than now means next day; any failure, including a missing tz database, means `reset unknown`).
 The worker's own status file becomes `state: blocked` with `blockers: quota: <provider>

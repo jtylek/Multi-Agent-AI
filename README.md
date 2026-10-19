@@ -249,6 +249,9 @@ py -3.12 -m venv .venv
 .venv\Scripts\multi-agent-ai init --project-root <target-project>
 .venv\Scripts\multi-agent-ai inspect --project-root <target-project>
 
+# readiness check: Python, Git, provider CLIs (found, version), state root; read-only, no provider call
+.venv\Scripts\multi-agent-ai doctor --project-root <target-project>
+
 # one read-only review by a managed Codex worker; without --execute this is a dry run
 # (checks and prints the command, starts nothing); --execute launches it and uses provider quota
 .venv\Scripts\multi-agent-ai worker run --project-root <target-project> --provider codex `

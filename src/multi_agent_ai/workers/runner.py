@@ -31,7 +31,7 @@ from ..mailbox import ACK_PREFIX, ACK_SUFFIX, REQUEST_FILE
 from ..models import Attempt, Plan, Status, Subtask
 from ..state import StateIndex, StateRoot
 from . import failures as fc
-from . import gitops, quota
+from . import gitops, quota, versions
 from .base import MODES, Invocation, LaunchRequest, ProfileUnconfigured, ProviderAdapter, forbidden_in
 from .codex import CodexAdapter
 from .copilot import CopilotAdapter
@@ -252,12 +252,15 @@ def run_worker(
     env: Mapping[str, str] | None = None,
     resolver: Callable[..., winproc.ResolvedCommand] | None = None,
     cli_version: str | None = None,
+    version_reader: Callable[..., versions.CliVersion] | None = None,
 ) -> WorkerOutcome:
     """Run one attempt. Raises :class:`UsageError` before anything is written; afterwards
     every outcome is recorded (runs dir, result.json, SQLite attempt, status file).
 
-    ``cli_version`` is the provider CLI version when positively known (no probe is ever run, as it
-    could use quota); without it a limit signature is reported as ``provider_error``."""
+    The provider CLI version comes from ``cli_version`` when the caller positively knows it,
+    otherwise from the CLI's own ``--version`` (T18; ``version_reader`` replaces the probe in
+    tests). It is recorded in the attempt and keys the quota detector tables; an unknown version
+    makes a limit signature a ``provider_error``."""
     validate_request(req)
     task_dir = req.state_root.tasks / req.task_id
     parsed = read_plan(task_dir)
@@ -358,6 +361,16 @@ def run_worker(
     if length > winproc.MAX_COMMAND_LINE:
         evidence["arguments_rejected"] = True
         return finish(f"command line is {length} characters; Windows allows {winproc.MAX_COMMAND_LINE}")
+
+    # provider CLI version (its own --version: local, no sign-in, no quota) -------------------
+    if cli_version is not None:
+        known = versions.CliVersion(cli_version, f"supplied by the caller: {cli_version}")
+    else:
+        known = (version_reader or versions.read_cli_version)(command, child_env)
+    cli_version = known.version
+    run.result["cli_version"] = known.as_record()
+    if known.error:
+        run.result["findings"].append(f"cli version unknown: {known.error}")
 
     # launch -------------------------------------------------------------------------------
     run.status("in progress", "none")
@@ -469,7 +482,7 @@ def preview_worker(
     adapter = adapter or ADAPTERS[req.provider]()
     problems: list[str] = []
     preview: dict[str, Any] = {
-        "dry_run": True, "provider": req.provider, "mode": req.mode, "task": req.task_id,
+        "dry_run": True, "cli_version": "not probed in a dry run (the CLI is not started)", "provider": req.provider, "mode": req.mode, "task": req.task_id,
         "subtask": req.subtask_id, "agent": req.agent_id, "worktree": str(req.worktree),
         "plan_revision": plan.revision, "model": req.model, "timeout": req.timeout,
         "branch": None, "commit_to_review": None, "profile": None, "verify_command": None,
@@ -619,6 +632,7 @@ def _finish(run: _Run, evidence: dict[str, Any], detail: str | None, message: st
             "duration_seconds": run.result["duration_seconds"], "timed_out": run.result["timed_out"],
             "commit_created": commit, "run_dir": str(run.run_dir),
             "failure_class": failure, "model": req.model, "limit": run.result.get("limit"),
+            "cli_version": (run.result.get("cli_version") or {}).get("version"),
         })
 
     review_path = None
