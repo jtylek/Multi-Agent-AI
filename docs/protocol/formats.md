@@ -25,10 +25,10 @@ Reading rules (lenient, because many editors and agents write these files):
 2. Normalise CRLF and lone CR to LF.
 3. The header block ends at the **first blank line**. Every non-blank line before it must
    match `key: value`; a non-matching line ends the header there with a warning (the rest is
-   body). With no blank line at all, matching lines from the top form the header up to the
-   first non-matching line, plus a warning "missing blank separator". Example (warning):
-   `id: a` / `from: b` / `to: c` / `Note: please ack` without a blank line parses `note` as a
-   header.
+   body). A file that is only a header block needs no blank line and gets no warning (the body
+   is optional). Example (no warning): `id: a` / `from: b` / `to: c` / `Note: please ack`
+   without a blank line parses `note` as a header. Example (warning): `id: a` / `from: b` /
+   `please acknowledge this` ends the header at line 3 and treats it as body.
 4. Spaces after the colon are skipped, so column-aligned values (`agent:    codex`) parse.
 5. Keys are case-insensitive; the canonical written form is lowercase.
 6. A repeated key: the first wins and the parser records a warning.
@@ -111,8 +111,9 @@ must equal the id in the `agent:` line.
 | `plan-revision` | when the request concerns a plan revision | positive integer; written after `status` |
 | body | expected for `changes requested` | response and outstanding issues |
 
-A request concerns a plan revision when it carries a `plan-revision` header or its body says
-so. An ack to such a request without `plan-revision` is **invalid** and does not count. An ack
+A request concerns a plan revision only when it carries a `plan-revision` header; the body is
+never parsed for it. An ack to such a request without `plan-revision` is **invalid** and does
+not count. A request without the header concerns no revision, whatever its prose says. An ack
 quoting an older revision is recorded as stale and does not count.
 
 Semantics a parser keeps separate: `received` ≠ `agreed`; an ack may reject; "all agreed"
