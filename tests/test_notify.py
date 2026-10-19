@@ -97,9 +97,11 @@ def test_notify_records_failed_and_manual_without_creating_ack(tmp_path, monkeyp
     assert not (root / "messages" / "m2" / "ack-codex.md").exists()
     with StateIndex.open(root / "state.sqlite3", read_only=True) as index:
         records = index.list_records(Notification)
-    assert [record.transport_result for record in records] == ["failed", "manual"]
-    assert "rejected" in (records[0].manual_relay_text or "")
-    assert "Check the agent mailbox" in (records[1].manual_relay_text or "")
+    by_recipient = {record.recipient_id: record for record in records}
+    assert by_recipient["codex"].transport_result == "failed"
+    assert "rejected" in (by_recipient["codex"].manual_relay_text or "")
+    assert by_recipient["bad"].transport_result == "manual"
+    assert "Check the agent mailbox" in (by_recipient["bad"].manual_relay_text or "")
 
 
 def test_dry_run_rejects_unsupported_codex_contact(tmp_path):
