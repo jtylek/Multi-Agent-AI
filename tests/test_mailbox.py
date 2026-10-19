@@ -100,7 +100,7 @@ def test_ack_valid_example_2_changes_requested_with_revision():
 def test_ack_valid_example_3_status_case_insensitive_without_product():
     p = ack("id: m9\nagent: copilot-e19f\nstatus: RECEIVED\n", "m9", "copilot-e19f")
     assert p.ok and p.value.status == "received" and p.value.product is None
-    assert p.warnings == ["missing blank separator after the header block"]  # see Interpretations
+    assert p.warnings == []  # a body-less file needs no blank separator
     assert ack("id: m9\nagent: copilot-e19f\nstatus: RECEIVED\n\n", "m9", "copilot-e19f").warnings == []
 
 

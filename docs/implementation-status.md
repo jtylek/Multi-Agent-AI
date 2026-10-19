@@ -47,10 +47,10 @@ transport; Git/worktree management; verification and routing; VS Code integratio
 
 Where formats.md left room, the implementation chose the conservative reading:
 
-1. **Header-only files.** A file that ends after its header with no blank line (for example
-   the status example and the third ack example in formats.md) is valid but carries the
-   "missing blank separator" warning, exactly as section 1 rule 3 states. Writers always emit
-   the blank line.
+1. **Body-less files.** A file that is only a header block (the status example and the third
+   ack example in formats.md) needs no blank separator and gets no warning, because the body
+   is optional (plan revision 12). Non-header text directly after the header, with no blank
+   line, ends the header there with a warning. Writers always emit the blank line.
 2. **Header-only.** A request concerns a plan revision only if it has a `plan-revision`
    header; the body is never parsed for it (plan revision 11 replaced an earlier reading that
    inferred it from the body). Acks to a header-carrying request without `plan-revision` are

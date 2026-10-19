@@ -34,11 +34,17 @@ def test_non_matching_line_ends_header_with_warning():
     assert len(doc.warnings) == 1 and "line 2" in doc.warnings[0]
 
 
-def test_formats_example_missing_blank_separator_parses_note_as_header():
+def test_header_only_file_has_no_warning():
     doc = parse_text("id: a\nfrom: b\nto: c\nNote: please ack\n")
-    assert doc.headers["note"] == "please ack"
-    assert doc.body == ""
-    assert any("missing blank separator" in w for w in doc.warnings)
+    assert doc.headers["note"] == "please ack"  # indistinguishable from a header: no body, no warning
+    assert doc.body == "" and doc.warnings == []
+    assert parse_text("id: a").warnings == [] and parse_text("id: a\r\n").warnings == []
+
+
+def test_non_header_text_right_after_the_header_warns_without_a_blank_line():
+    doc = parse_text("id: a\nfrom: b\nplease acknowledge this\n")
+    assert doc.headers == {"id": "a", "from": "b"} and doc.body == "please acknowledge this"
+    assert len(doc.warnings) == 1 and "line 3" in doc.warnings[0]
 
 
 def test_column_aligned_values_and_trailing_whitespace():

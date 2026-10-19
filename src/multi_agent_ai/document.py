@@ -64,11 +64,9 @@ def parse_text(text: str) -> Document:
     repeated: dict[str, list[str]] = {}
     warnings: list[str] = []
     body_start = len(lines)
-    blank_found = False
     for number, line in enumerate(lines):
         if not line.strip():
             body_start = number + 1
-            blank_found = True
             break
         match = _HEADER_LINE.fullmatch(line)
         if not match:
@@ -83,9 +81,8 @@ def parse_text(text: str) -> Document:
             warnings.append(f"repeated key '{key}' on line {number + 1}; the first value wins")
         else:
             headers[key] = value
-    if not blank_found and all(line.strip() for line in lines):
-        warnings.append("missing blank separator after the header block")
-    body = "\n".join(lines[body_start:]).rstrip("\n")
+    # A file that is only a header block needs no separator: the body is optional.
+    body ="\n".join(lines[body_start:]).rstrip("\n")
     return Document(headers=headers, body=body, warnings=warnings, repeated=repeated)
 
 
