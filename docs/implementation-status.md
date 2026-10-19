@@ -34,14 +34,19 @@ listed below is planned, not implemented.
     messages with per-recipient ack state, tasks with plan revision and subtask states, and
     staleness/conflict findings. It creates no file; an existing index is opened read-only.
   - `index`: rebuilds the derived index and reports plan revisions lower than one seen.
+- Read-only reachability discovery (`reachability.py` and `agents`): exact-project-cwd Claude
+  sessions and Codex app-server threads, with provider errors reported separately.
+- Notification transport (`notify.py` and `notify`): dry-run by default; with explicit `--send`,
+  sends mailbox pointers through configured Codex/Copilot contacts and reports Claude/manual relay
+  targets. Transport is never an ack.
 - Tests in `tests/` cover every valid and invalid example in formats.md, plus the D8 rule
   that exit codes and notification transport never create an ack or a completion.
 
 ## Not implemented
 
 Registry (`registry/`, O2) and reservation checks; review-file parsing; message cleanup and
-bounded watches (formats.md section 7); provider adapters, process launching, notification
-transport; Git/worktree management; verification and routing; VS Code integration.
+bounded watches (formats.md section 7); provider process adapters, process launching; Git/worktree
+management; verification and routing; VS Code integration.
 
 ## Interpretations
 
