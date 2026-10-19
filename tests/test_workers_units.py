@@ -59,7 +59,7 @@ def test_copilot_review_argv_exact():
     assert list(inv.args) == [
         "-C", str(WT), "-p", PROMPT, "--output-format", "json", "--silent", "--session-id", SESSION,
         "--usage-output-file", str(RUN / "usage.json"), "--disallow-temp-dir",
-        "--available-tools=bash,view,grep,glob",
+        "--available-tools=powershell,view,grep,glob",
         r"--allow-tool=shell(git diff),shell(git log),shell(git show),shell(.venv\Scripts\python -m pytest -q)",
         "--deny-tool=shell(git commit),shell(git push),url",
     ]
@@ -72,7 +72,7 @@ def test_copilot_implement_argv_exact_with_model():
     assert list(inv.args) == [
         "-C", str(WT), "-p", PROMPT, "--output-format", "json", "--silent", "--session-id", SESSION,
         "--usage-output-file", str(RUN / "usage.json"), "--disallow-temp-dir", "--model", "claude-sonnet-5",
-        "--available-tools=bash,create,edit,view,grep,glob",
+        "--available-tools=powershell,create,edit,view,grep,glob",
         r"--allow-tool=shell(git diff),shell(git log),shell(git show),shell(.venv\Scripts\python -m pytest -q),write",
         "--deny-tool=shell(git commit),shell(git push),url",
     ]

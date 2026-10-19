@@ -32,7 +32,7 @@ from ..models import Attempt, Plan, Status, Subtask
 from ..registry import reservation_conflicts
 from ..state import StateIndex, StateRoot
 from . import failures as fc
-from . import gitops, quota, versions
+from . import gitops, quota, scaffold, versions
 from .base import MODES, Invocation, LaunchRequest, ProfileUnconfigured, ProviderAdapter, forbidden_in
 from .codex import CodexAdapter
 from .copilot import CopilotAdapter
@@ -314,6 +314,11 @@ def run_worker(
     run.result["git"] = {"branch": info.branch, "head_before": info.head}
     if req.mode == "implement":
         refusal = _implement_refusal(req, info, before)
+        if not refusal:
+            try:
+                scaffold.plan_directories(req.worktree, subtask.files)
+            except scaffold.PathRefused as exc:
+                refusal = f"files/area of {req.subtask_id} cannot be prepared: {exc}"
         if refusal:
             evidence["environment_error"] = True
             return finish(refusal)
@@ -326,6 +331,9 @@ def run_worker(
             return finish(f"commit to review not found: {exc}")
         run.result["git"]["commit_reviewed"] = commit
     primary_before = _primary_head(req.project_root)
+
+    if req.mode == "implement":  # deterministic, inside the worktree only; a worker needs no shell for mkdir
+        run.result["created_directories"] = scaffold.create_directories(req.worktree, subtask.files)
 
     # prompt and invocation ----------------------------------------------------------------
     board = task_dir / "plan.md"
@@ -417,6 +425,8 @@ def run_worker(
     parsed_output = adapter.parse_output(run.run_dir / "stdout.log", invocation)
     message = parsed_output.final_message
     run.result["usage"] = parsed_output.usage
+    if "usage_totals" in parsed_output.session:  # measured, from the provider's own usage file
+        run.result["usage_totals"] = parsed_output.session.pop("usage_totals")
     if parsed_output.session:
         run.result["provider_session"] = parsed_output.session
     if result.exit_code != 0 and not result.timed_out:
@@ -500,7 +510,7 @@ def preview_worker(
         "dry_run": True, "cli_version": "not probed in a dry run (the CLI is not started)", "provider": req.provider, "mode": req.mode, "task": req.task_id,
         "subtask": req.subtask_id, "agent": req.agent_id, "worktree": str(req.worktree),
         "plan_revision": plan.revision, "model": req.model, "timeout": req.timeout,
-        "branch": None, "commit_to_review": None, "profile": None, "verify_command": None,
+        "branch": None, "commit_to_review": None, "directories_to_create": [], "profile": None, "verify_command": None,
         "command": None, "argv": None, "prompt_sha256": None, "env_names": None, "problems": problems,
     }
     try:
@@ -515,6 +525,12 @@ def preview_worker(
     if req.mode == "implement":
         if refusal := _implement_refusal(req, info, before):
             problems.append(refusal)
+        else:
+            try:
+                plan_dirs = scaffold.plan_directories(req.worktree, subtask.files)
+                preview["directories_to_create"] = plan_dirs.to_create
+            except scaffold.PathRefused as exc:
+                problems.append(f"files/area of {req.subtask_id} cannot be prepared: {exc}")
     else:
         try:
             commit = gitops.git(req.worktree, "rev-parse", "--verify", f"{req.commit or 'HEAD'}^{{commit}}").strip()
@@ -647,6 +663,8 @@ def _finish(run: _Run, evidence: dict[str, Any], detail: str | None, message: st
             "commit_created": commit, "run_dir": str(run.run_dir),
             "failure_class": failure, "model": req.model, "limit": run.result.get("limit"),
             "cli_version": (run.result.get("cli_version") or {}).get("version"),
+            "usage_totals": run.result.get("usage_totals"),
+            "created_directories": run.result.get("created_directories"),
         })
 
     review_path = None
