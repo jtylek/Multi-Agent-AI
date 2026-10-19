@@ -1,4 +1,8 @@
-# Field report: two multi-agent joint tasks in Epesi
+# Case study: two multi-agent joint tasks in EpesiCRM
+
+> This is a project-specific case study. The requirements it derives (R1-R14) are stated
+> generically; Epesi-specific details (PHP, Composer, Laravel, Premium modules) are examples
+> of what a project profile must express, not engine features.
 
 **Source:** Coordinator's report from two completed joint tasks involving Claude Code sessions, Codex, and VS Code Copilot in a shared Laravel/Epesi checkout. This is an experience report, not a claim that the new orchestrator already implements these controls.
 
@@ -48,21 +52,21 @@ These are **proposed implementation requirements**, inferred from the field repo
 - **R4:** The scheduler refuses overlapping file reservations unless the coordinator explicitly resolves them.
 - **R5:** Message state distinguishes written, notification submitted, acknowledged, agreed, and blocked. Never infer acknowledgment from CLI exit status.
 - **R6:** Unreachable sessions are reported with a concrete manual-relay instruction; no attempts to take over unrelated chats.
-- **R7:** Preflight verifies PHP, Composer, dependencies, frontend assets, module availability, DB isolation, and test commands before claiming verification is meaningful.
+- **R7:** Preflight verifies the profile's runtimes and package managers (here PHP and Composer), installed dependencies, built assets, module availability, DB isolation, and test commands before claiming verification is meaningful.
 - **R8:** Reviews run in a representative environment and name the exact commit and tests inspected.
 - **R9:** Integration occurs in dependency order on a dedicated local branch, followed by a full-suite gate.
 - **R10:** Changes to user/live branches, remote pushes, and deployments require explicit user approval.
 - **R11:** Deployments use a clean, verified artifact/checkout, not an arbitrary shared working tree.
 - **R12:** Benchmarks state the method and compare matched environments; unavailable usage data is reported as unknown.
 - **R13:** Status freshness, blocked state, and reviewer availability are reconciled before rescheduling.
-- **R14:** Cross-module migrations, formatting exceptions, nested Git repositories, and Premium-module-dependent behavior are modeled in project configuration.
+- **R14:** Cross-module migrations, formatting exceptions, nested Git repositories, and optional-module-dependent behavior (here Epesi Premium modules) are modeled in project configuration.
 
 ## Suggested implementation order
 
 1. Durable task board and mailbox with revision/ack validation.
 2. Windows-native agent/session registry and reachability probes.
 3. Workspace/worktree isolation, file reservations, and live-branch protections.
-4. Preflight environment checks and test command profiles (including Epesi).
+4. Preflight environment checks and test command profiles (an Epesi profile as the first trial).
 5. Dependency-aware integration, cross-agent review, and approval gates.
 6. Status reconciliation, performance telemetry, and adaptive cost-based routing.
 

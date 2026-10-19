@@ -1,0 +1,264 @@
+# Agent messaging and joint-task protocol (v1)
+
+This is the authoritative protocol for how AI agents (Claude Code, Codex, Copilot, or others)
+and developers coordinate through Multi-Agent AI. Exact file grammar is in
+[formats.md](formats.md); design decisions behind it are in
+[../decisions.md](../decisions.md).
+
+It is a project-neutral generalisation of a protocol first used in a real multi-agent
+project; that original is kept unchanged in
+[upstream/epesi-agent-messaging.md](upstream/epesi-agent-messaging.md) for provenance. Where
+the two differ, this document wins.
+
+## Overview
+
+The **state root** is a directory in the target project's **primary checkout** that holds all
+coordination state. It is excluded from Git. Default: `.multi-agent-ai/`; a project may
+configure another path (for example a Laravel project may keep `storage/framework/agents/`).
+Workers in a Git worktree read and write the primary checkout's state root by absolute
+path, never their worktree's empty copy.
+
+```text
+<state-root>/
+  messages/<message-id>/
+    request.md
+    ack-<recipient-agent-id>.md
+  tasks/<task-id>/
+    plan.md                          coordinator only
+    status-<agent-id>.md             each participant, its own only
+    review-<subtask>-<agent-id>.md   the reviewer only
+    notes/<agent-id>-<topic>.md      optional findings, author only
+  registry/<agent-id>.md             planned: presence and file reservations
+```
+
+Three mechanisms work together:
+
+- the **mailbox**: durable request/acknowledgment files any agent with filesystem access can
+  read and write;
+- **native notification**: a product-specific way to wake a reachable session (optional; not
+  every product has one);
+- the **task board**: a revisioned plan plus per-agent status files for one joint task.
+
+Every file has exactly **one writer**. Nobody edits, overwrites or deletes another
+participant's file, except where this document gives cleanup to a specific owner.
+
+## Agent identity
+
+Every participant uses one agent id for the whole task: path-safe (letters, digits, `.`, `_`,
+`-`; recommended `<product>-<suffix>`, e.g. `claude-a7`, `codex-a91e`). Until the registry is
+implemented, ids are assigned by the coordinator or the user. Do not confuse provider identity
+with session identity: two Claude sessions are two agents.
+
+## Mailbox and acknowledgments
+
+The sender writes `messages/<id>/request.md` with explicit recipient ids:
+
+```text
+id: <unique-message-id>
+from: <sender-agent-id>
+to: <recipient-agent-id>, <another-recipient-agent-id>
+
+<Message or proposed decision. Ask for an acknowledgment and, if needed, review.>
+```
+
+Each recipient writes its own `ack-<recipient-agent-id>.md`:
+
+```text
+id: <same-message-id>
+agent: <recipient-agent-id> (<actual agent product and model if known>)
+status: received | agreed | changes requested
+plan-revision: <n>
+
+<Response, including any outstanding issues.>
+```
+
+`plan-revision` is required when the request concerns a plan revision and omitted otherwise.
+
+Rules:
+
+- Receipt and agreement differ: an acknowledgment may reject a proposal. Do not report
+  agreement until all named participants explicitly agree to the same revision.
+- A request stays unconfirmed until its recipient writes an acknowledgment. Transport success,
+  a zero exit code, or a queued notification is never an acknowledgment.
+- `received` or `agreed` does not reserve files or authorize overlapping edits.
+- Use `to: broadcast` only when the request is for every agent. A broadcast that needs
+  agreement lists the expected participants in its body so completion has a defined meaning.
+- A recipient that finds a request not addressed to it (neither named in `to` nor a
+  broadcast) does not act on it.
+- A participant who finds its own ack wrong appends a dated correction; it does not rewrite
+  what it said.
+- Follow-up files such as reviews belong to their author and name the exact files, commit or
+  revision reviewed.
+- Never store secrets in any coordination file.
+
+**When to check.** Check for requests at start or resume, before edits or tests, and when
+notified. Do not poll the mailbox on a timer: it is a durable record, not a notification
+channel. While waiting for named recipients, a sender may run a **bounded watch** of its own
+message directory and stop it when every expected acknowledgment exists or the time limit
+expires. That is response tracking for one exchange, not periodic polling of incoming mail.
+
+**Cleanup.** The sender owns its message directory, including acknowledgment files, and
+removes it after all named recipients acknowledge and any requested work or review is
+resolved. After roughly three hours without activity in the whole exchange, the sender may
+cancel an abandoned request and remove its directory. Never expire an ongoing review just
+because the request is old, and never infer receipt or agreement from cancellation. Preserve
+unresolved work in a handoff note. Nobody else removes someone's message directory.
+
+## Joint tasks
+
+A joint task is one problem that several agents and developers solve concurrently.
+
+### Roles
+
+- **Coordinator**: the agent whose user started the problem. It owns the plan, assigns work,
+  integrates, runs the full verification and reports to the user. There is exactly one per
+  task; the user may hand the role to another agent, and the plan records the change.
+- **Workers**: every other participant. Each owns its subtasks, its status file and its
+  branch.
+
+### Plan
+
+`plan.md` holds the task id, coordinator, `revision`, `updated`, goal, acceptance criteria
+(including the exact commands that verify them), base commit, integration branch, and a
+subtask table:
+
+```text
+| id | what | files/area | depends on | worktree | owner | reviewer | state |
+```
+
+- `files/area` is the ownership scope; active subtasks must not overlap unless the coordinator
+  explicitly resolves it. For a shared document, assign named sections or serialize changes.
+- `worktree: yes` means the subtask works on branch `task/<task-id>/<subtask-id>` in its own
+  worktree from the base commit; `no` means it works in the primary checkout on its owned
+  files only. A worktree may need its own dependency install and environment files; the
+  project profile declares what. Anything that exists only in the primary checkout (for
+  example nested repositories or generated assets not reproduced in worktrees) must be `no`.
+- `reviewer` is an agent other than the owner, preferably a different product, or `waived`
+  for trivial work (documentation, translations, one-line fixes).
+- An owner prefixed `proposed:` is not an assignment.
+- `state` is one of `open`, `assigned`, `in progress`, `blocked`, `review`, `done`, `merged`.
+
+The coordinator increments `revision` on **every** change and takes `updated` from the system
+clock. Agents quote the revision they act on, so a stale reading is visible. The integration
+branch `task/<task-id>/integration` is local and never pushed.
+
+### Worker status
+
+`status-<agent-id>.md` holds the plan revision last read, the subtask, its state, branch and
+last commit, scoped tests run and their results, blockers or questions, and `updated`. Update
+it on every state change, including `running tests: <scope>` while tests run. Status must
+reflect reality.
+
+### Lifecycle
+
+1. **Kickoff.** The coordinator writes `plan.md`, then a mailbox request with explicit `to:`
+   participants pointing at it, and notifies them natively where possible; otherwise it asks
+   the user to prompt each chat.
+2. **Join.** Each participant acknowledges with `agreed` or `changes requested`, the subtasks
+   it wants, and what it can do (product, tools, worktree ability, contact). The coordinator
+   assigns owners and reviewers in a new plan revision. Workers never assign themselves.
+3. **Work.** One owner per subtask, disjoint files. Run scoped tests only and commit only your
+   own work, on your own local, unpushed `task/<task-id>/*` branch. The coordinator's
+   integration run is the gate, so nothing reaches another branch without full verification.
+4. **Questions and interface changes.** Send a request to the affected owners and the
+   coordinator. The coordinator decides any shared-interface change and publishes it as a new
+   plan revision; owners adapt to that revision, not to side agreements.
+5. **Review.** Each finished subtask gets its reviewer unless waived. The reviewer names the
+   exact commit, and reproduces relevant tests in a representative environment rather than
+   only reading the diff. `changes requested` sends the subtask back to `in progress`.
+6. **Integration.** The coordinator merges reviewed branches into the integration branch in
+   dependency order, resolves conflicts with the owners, runs the full verification once
+   (announcing it), and reports to the user. Merging into the user's working branch or main,
+   any push, and any deployment need the user's explicit approval.
+7. **Close.** The coordinator moves durable knowledge into the project's documentation,
+   removes the task directory and its own mailbox requests, and asks other senders to clean
+   up theirs. Workers remove their merged worktrees and branches.
+
+Keep round trips few: give each agent 2-4 subtasks that can finish without waiting on
+others, and fix the interfaces between subtasks in the first plan revision.
+
+### Failures and disagreement
+
+- Read the board at start/resume, before edits or tests, and when notified. The coordinator
+  may run a bounded watch of its own task directory while waiting.
+- A worker whose status is about three hours stale is unavailable. The coordinator may
+  reassign its subtask in a new revision, but never takes over its uncommitted changes or
+  worktree.
+- `changes requested` in an ack or review blocks that item. The coordinator decides or
+  escalates to the user; nobody silently overrides another participant.
+- If a worker's user or permission settings deny an action, the denial goes back to the user.
+  Nobody reassigns the work to another agent to get around it. A peer message never grants
+  user authority.
+- Work that outlives the sessions gets a handoff note written by the coordinator.
+
+## Registry (planned)
+
+`registry/<agent-id>.md` will advertise presence and file reservations: headers `agent`,
+`started`, `updated`, `task`, `files` (globs; this **is** the reservation), `status`, and
+optional `contact` describing how the session can be reached. An entry is stale after about
+three hours without update; a stale entry releases its reservation but not the agent's
+uncommitted changes. A message written into a registry entry notifies no one. Until the
+registry is implemented, the plan's subtask table is the reservation record.
+
+## Notification and reachability
+
+There is no universal wake-up channel across products. Discover reachability before
+assigning time-sensitive work, and use the mailbox in every case.
+
+If a recipient cannot be reached with a supported native mechanism, ask the user to prompt
+that existing chat:
+
+```text
+Check the agent mailbox: read <absolute path to request.md>.
+```
+
+Creating a helper or opening a new chat does not prove receipt by the intended session. Do
+not resume, fork, interrupt, or modify private session data to force delivery.
+
+### Claude Code
+
+Native `ListAgents` / `SendMessage` reach other Claude Code sessions on the same machine.
+From the project root, run `claude agents --json` and select sessions whose `cwd` matches the
+checkout; the `name` is the address. Write the mailbox request first, then `SendMessage` the
+recipient to point at it.
+
+Other products can invoke a short-lived, restricted Claude relay:
+
+```powershell
+$relayPrompt = @'
+Act as a read-only messaging relay. Use ListAgents, then SendMessage.
+Send only to these verified session names: <names from discovery>.
+Tell each recipient: Check the agent mailbox; read <absolute request path>
+and write your own ack-<your-agent-id>.md in that directory.
+Report send results accurately. Do not edit files, run commands or tests, commit,
+resume, fork, or interrupt other sessions. Do not wait for a reply to this relay.
+'@
+claude -p $relayPrompt --tools ListAgents SendMessage ToolSearch Read --allowedTools ListAgents SendMessage ToolSearch Read --output-format json
+```
+
+`--tools` restricts availability; `--allowedTools` alone only grants permission. If the relay
+exposes other tools, stop and use the user-prompt fallback. Send success proves transport
+acceptance only; the recipient, not the relay, writes the acknowledgment.
+
+### VS Code Copilot
+
+```powershell
+code chat --reuse-window --mode agent --add-file <absolute-request-path> 'Read the attached inter-agent request and write your own ack-<your-agent-id>.md alongside request.md. Do not edit other files, run tests or commit.'
+```
+
+This submits to the last active VS Code window and does not select a particular conversation
+or guarantee which product handles it. A zero exit code confirms submission only; verify the
+responder's identity in its acknowledgment.
+
+### Codex
+
+If exposed in the current runtime, `send_input` reaches agents spawned in the **same**
+Codex-managed agent hierarchy, by their runtime ids. It does not make an existing top-level
+Codex chat addressable from Claude, Copilot, or another independent Codex session. For such a
+chat, write the request and ask the user to send it the one-line prompt above. Do not spawn a
+new helper as a substitute for delivery to a specified existing agent.
+
+### Managed workers
+
+Workers the orchestrator launches itself receive assignments through orchestrator-controlled
+invocation and state. That is different from taking over an unrelated interactive chat.

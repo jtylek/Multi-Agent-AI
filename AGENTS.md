@@ -16,7 +16,7 @@ A developer should be able to give **one job to one coordinator agent**. That co
 
 The system should support **multiple concurrent agents and multiple sessions**, including several workers from the same provider, while keeping one coordinator per job.
 
-The first major real-world target is `jtylek/EpesiCRM`, but the orchestrator must remain reusable for arbitrary Git repositories.
+The orchestrator is project-neutral and must work for arbitrary Git repositories. Project-specific behavior (environments, test commands, nested repositories, live branches, deployment rules) lives in **project profiles**, never in the engine. EpesiCRM (`jtylek/EpesiCRM`), where the coordination protocol was first used, is the first planned real-world trial and a case study, not a special case of the design.
 
 ## 2. Core architectural decision: hybrid control plane
 
@@ -98,7 +98,7 @@ Orka-inspired ideas we want:
 - acceptance criteria and verification gates
 - escalation when a cheaper/less capable model fails
 
-Our implementation must improve on this for native Windows, persistent sessions, VS Code workflows, and the proven Epesi coordination protocol.
+Our implementation must improve on this for native Windows, persistent sessions, VS Code workflows, and the field-tested coordination protocol in `docs/protocol/`.
 
 Reuse third-party code only when its license permits it and attribution/obligations are handled correctly.
 
@@ -152,14 +152,14 @@ This data will later feed routing decisions.
 
 ## 7. Inter-agent messaging: durable mailbox first
 
-The Epesi experiments produced a working ad-hoc protocol. Preserve its central semantics.
+The protocol is specified in `docs/protocol/agent-messaging.md` (authoritative) with exact file grammar in `docs/protocol/formats.md`. It generalises a protocol proven in real multi-agent work (see `docs/case-studies/`). Preserve its central semantics.
 
 The mailbox is a **durable record**, not a universal notification mechanism.
 
-For compatibility with the existing Epesi workflow, the default target-project layout is:
+All coordination state lives under a configurable **state root** in the target project's primary checkout, excluded from Git. Default `.multi-agent-ai/`; a project profile may choose another path (for example `storage/framework/agents/` for a Laravel project that already uses it):
 
 ```text
-storage/framework/agents/
+<state-root>/
   messages/<message-id>/
     request.md
     ack-<recipient-agent-id>.md
@@ -169,8 +169,6 @@ storage/framework/agents/
     review-<subtask>-<agent-id>.md
     notes/<agent-id>-<topic>.md
 ```
-
-The orchestrator should eventually allow this mailbox root to be configured for non-Epesi projects.
 
 ### Message semantics
 
@@ -215,7 +213,7 @@ Codex `send_input` can reach agents that are in the same reachable Codex-managed
 When an intended Codex chat cannot be reached, write the mailbox request and give the user a one-line manual relay such as:
 
 ```text
-Check the agent mailbox: read storage/framework/agents/messages/<id>/request.md.
+Check the agent mailbox: read <absolute state-root path>/messages/<id>/request.md.
 ```
 
 The future orchestrator may launch and manage its own Codex worker processes; those managed workers can receive assignments through orchestrator-controlled invocation/state. That is different from hijacking an unrelated interactive chat.
@@ -273,7 +271,7 @@ Status must reflect reality. The orchestrator should eventually detect stale sta
 
 **One writer per file at a time.**
 
-This was one of the strongest successful practices in the Epesi trials.
+This was one of the strongest successful practices in the field trials.
 
 Before assignment, compare a proposed worker scope against:
 
@@ -302,9 +300,9 @@ Do not push the integration branch or merge it into the user's working branch/ma
 
 Do not let an agent quietly commit to a branch that is serving live traffic.
 
-## 12. Epesi-specific lesson: live checkout protection
+## 12. Live checkout protection
 
-In the real Epesi trials, a commit in a nested Premium repository on its live branch immediately affected the running site and crashed it because a dependency was not integrated yet.
+In a real field trial, a commit in a nested module repository on its live branch immediately affected the running site and crashed it because a dependency was not integrated yet. Any project whose development checkout also serves traffic is exposed to this.
 
 Therefore the orchestrator needs explicit live-workspace protections:
 
@@ -315,7 +313,7 @@ Therefore the orchestrator needs explicit live-workspace protections:
 - require explicit approval before operations that can affect the live checkout
 - do not use blanket global Git safety changes when a scoped override suffices
 
-Premium modules may be separate Git repositories inside the main Epesi checkout. Model that explicitly; do not assume one repository == one working tree.
+Modules or plugins may be separate Git repositories nested inside the main checkout. Model that explicitly in the project profile; do not assume one repository == one working tree.
 
 ## 13. Integration and verification
 
@@ -344,41 +342,41 @@ Review files must identify the exact commit/revision being reviewed and the rele
 
 ## 14. Review must test, not only read diffs
 
-The Epesi rounds demonstrated that cross-agent review found real bugs that local author tests missed.
+The field trials demonstrated that cross-agent review found real bugs that local author tests missed.
 
 Examples included:
 
 - removing an import together with a supposedly dead method and breaking a main page
 - using a query-builder method/column assumption that silently failed under SQLite and would fail differently on MySQL
 - missing job de-duplication
-- tests affected by Premium modules
+- tests affected by optional modules present in only some environments
 
 Therefore important reviews should reproduce relevant tests in a representative environment, not just inspect code.
 
 ## 15. Environment preflight is mandatory for meaningful verification
 
-The Epesi trials exposed environment failures that masked product failures:
+The field trials exposed environment failures that masked product failures:
 
 - worktrees lacked built frontend assets
-- PHP/Composer versions did not align
+- language runtime and package manager versions did not align
 - wrapper commands dropped test flags
 - schema loading wiped a seeded scratch database
-- Premium modules were present in some test contexts and absent in others
+- optional modules were present in some test contexts and absent in others
 
 The orchestrator should distinguish **environment/preflight failures** from **code/test failures**.
 
 Project profiles should be able to declare prerequisites such as:
 
 - required executable versions/paths
-- Composer install state
-- npm/build asset state
+- dependency install state (per package manager)
+- build asset state
 - `.env` requirements
 - module presence
 - database isolation requirements
 - exact verification commands
 - syntax/formatter constraints
 
-For Epesi, run the exact test command required by the project. Do not silently substitute a wrapper that drops flags.
+Run the exact test command the project profile declares. Do not silently substitute a wrapper that drops flags.
 
 ## 16. Baselines and performance claims
 
@@ -392,7 +390,7 @@ Do not publish a numerical claim without its method and baseline.
 
 ## 17. Deployment is a separate protected operation
 
-The Epesi workflow showed that deployment tooling may transmit the **working tree**, not merely committed changes. This can ship unrelated unfinished work.
+The field trials showed that deployment tooling may transmit the **working tree**, not merely committed changes. This can ship unrelated unfinished work.
 
 Therefore deployment must not be treated as a trivial continuation of Git integration.
 
@@ -527,33 +525,36 @@ Current preferred sequence:
    - job handoff
    - approvals
 
-## 23. First realistic integration target: EpesiCRM
+## 23. Project profiles and real-world trials
 
-Use Epesi as an integration target only after the basic engine is reliable.
+Run the orchestrator against a real project only after the basic engine is reliable, and never develop/test orchestration directly against a checkout serving live traffic.
 
-Do not develop/test orchestration directly against a checkout serving live traffic.
+A project profile declares everything project-specific. It will eventually need to model:
 
-Epesi project profile will eventually need to model:
-
-- Laravel/PHP environment
-- nested Premium module repositories
-- frontend assets
-- Composer/npm setup per worktree
+- language runtimes and package managers (paths, versions)
+- nested repositories and modules present only in some checkouts
+- build/frontend assets
+- dependency install and environment files per worktree
 - database/test isolation
-- exact PHPUnit/test invocation
+- the exact verification commands
 - syntax/formatter exceptions
 - module-dependent tests
-- deployment guardrails
+- live branches and deployment guardrails
+- the state-root path
+
+The first planned trial is EpesiCRM (a Laravel/PHP application with nested module repositories); its lessons are in `docs/case-studies/epesi-field-report.md`. Its needs are expressed as a profile, never as engine code.
 
 ## 24. Current repository documents
 
 Before making architectural changes, also read:
 
 - `README.md` — public project goals and planned architecture
-- `docs/agent-messaging.md` — current messaging-protocol integration summary
-- `docs/epesi-coordinator-field-report.md` — lessons from two real multi-agent Epesi rounds and derived requirements
+- `docs/protocol/agent-messaging.md` — **authoritative** messaging and joint-task protocol
+- `docs/protocol/formats.md` — **authoritative** coordination file grammar
+- `docs/decisions.md` — decided / accepted / proposed / open decisions
+- `docs/case-studies/epesi-field-report.md` — lessons from two real multi-agent rounds and derived requirements
 
-The original Epesi messaging protocol is more detailed than the summary. If/when it is imported verbatim into this repository, treat it as authoritative for protocol behavior unless this file explicitly supersedes it.
+`docs/protocol/upstream/` holds the original protocol verbatim for provenance only; the documents above supersede it.
 
 ## 25. Development behavior for agents working on this repository
 
@@ -567,16 +568,16 @@ Until the orchestrator can enforce these rules itself:
 6. Keep provider-specific behavior behind adapters.
 7. Keep core scheduling/protocol models provider-neutral.
 8. Preserve Windows-native support; do not introduce a required Bash/WSL dependency.
-9. Do not hard-code Epesi paths into the generic engine; use project configuration/profile abstractions.
+9. Do not hard-code any project's paths or tools into the generic engine; use project configuration/profile abstractions.
 10. Treat messaging delivery, acknowledgment, work completion, review, and integration as separate states.
 11. Avoid blind retries and token-wasting polling.
 12. Preserve user approval boundaries.
 
-## 26. Near-term handoff to Codex / Claude / Copilot
+## 26. Near-term work
 
-The immediate engineering task is **not** to implement everything at once.
+Status (2026-10-19): the architecture review is done. Conflicts and missing decisions were recorded in `docs/decisions.md`, the protocol and file formats are in `docs/protocol/`, and a coordination skill for agents is in `.agents/skills/agent-mailbox/` (with a Claude Code pointer in `.claude/skills/`). This repository's own development is coordinated through the protocol, with the state root at `.multi-agent-ai/`.
 
-Start by reviewing this architecture and the existing docs, then propose a minimal repository structure and the first executable milestone:
+The first executable milestone, in progress as joint task `m0-foundation`, subtask T6:
 
 - Python package skeleton
 - typed domain models / schemas for Job, Task, AgentSession, Message, Ack, Reservation, Attempt
@@ -585,4 +586,4 @@ Start by reviewing this architecture and the existing docs, then propose a minim
 - unit tests on Windows-compatible paths
 - CLI command(s) to initialize a target project state area and inspect jobs/agents/messages
 
-Before writing a large amount of code, identify any architectural conflicts or missing decisions and record them explicitly. Preserve the distinction between **what has been decided**, **what is proposed**, and **what is already implemented**.
+Python 3.11+, standard library only at runtime, `pytest` for development (decisions D1, D10). Before writing a large amount of code, identify any architectural conflicts or missing decisions and record them explicitly. Preserve the distinction between **what has been decided**, **what is proposed**, and **what is already implemented**.

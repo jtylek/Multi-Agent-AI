@@ -1,0 +1,9 @@
+# Local agent coordination state (mailbox, task board, registry, SQLite) — never committed
+.multi-agent-ai/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
