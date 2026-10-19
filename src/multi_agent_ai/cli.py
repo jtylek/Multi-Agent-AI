@@ -201,7 +201,7 @@ def _add_worker_parser(sub: argparse._SubParsersAction) -> None:
     help_text = ("run one managed worker attempt: build the prompt from plan.md, launch the provider "
                  "with a least-privilege profile, check the worktree, record the attempt (no retries)")
     run = worker_sub.add_parser("run", help=help_text, description=help_text)
-    run.add_argument("--provider", required=True, choices=("codex", "copilot"))
+    run.add_argument("--provider", required=True, choices=("codex", "copilot", "claude"))
     run.add_argument("--task", required=True, help="task id (tasks/<task-id>/plan.md)")
     run.add_argument("--subtask", required=True, help="subtask id from the plan's subtask table")
     run.add_argument("--agent-id", required=True, help="new managed-worker id, e.g. codex-w1 (never an existing chat's id)")
@@ -209,6 +209,8 @@ def _add_worker_parser(sub: argparse._SubParsersAction) -> None:
     run.add_argument("--worktree", required=True, help="absolute path of the worker's Git worktree")
     run.add_argument("--model", default=None, help="provider model (default: the provider's own default)")
     run.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help="seconds before the process tree is killed")
+    run.add_argument("--max-budget-usd", type=float, default=None,
+                     help="claude only: per-attempt spending cap passed as --max-budget-usd (off by default)")
     run.add_argument("--commit", default=None, help="review mode: SHA of the commit to review (default: worktree HEAD)")
     run.add_argument("--verify-command", default=None,
                      help="verification command (default: taken from plan.md); Copilot allows exactly shell(<command>)")
@@ -238,6 +240,7 @@ def _worker_main(args: argparse.Namespace) -> int:
         mode=args.mode, worktree=Path(args.worktree), project_root=Path(args.project_root).resolve(),
         state_root=root, model=args.model, timeout=args.timeout, commit=args.commit,
         live_branches=tuple(args.live_branch), pass_env=tuple(args.pass_env), verify_command=args.verify_command,
+        max_budget_usd=args.max_budget_usd,
     )
     try:
         if not args.execute:
