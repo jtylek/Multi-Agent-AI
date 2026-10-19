@@ -105,8 +105,8 @@ def test_codex_query_uses_one_total_deadline(monkeypatch, tmp_path):
         json.dumps({"id": 2, "result": {"data": []}}) + "\n",
     ]
     process = _FakeProcess("")
-    process.stdout = _DelayedStream(lines, 0.03)
+    process.stdout = _DelayedStream(lines, 0.08)
     monkeypatch.setattr("multi_agent_ai.reachability.resolve_executable", lambda _: "codex.cmd")
     monkeypatch.setattr("multi_agent_ai.reachability.subprocess.Popen", lambda *args, **kwargs: process)
     with pytest.raises(ReachabilityError, match="timed out"):
-        _query_codex_app_server(tmp_path, timeout=0.05)
+        _query_codex_app_server(tmp_path, timeout=0.12)
