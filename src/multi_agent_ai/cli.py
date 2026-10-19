@@ -113,6 +113,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if all(item.submitted for item in results):
             return 0
+        if any(not item.submitted and item.method not in {"manual", "manual (claude)"} for item in results):
+            return 1
         if any(item.method in {"manual", "manual (claude)"} for item in results):
             return 3
         return 1

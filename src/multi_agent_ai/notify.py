@@ -55,6 +55,14 @@ def _pointer(request_path: Path, sender: str, transport: str) -> str:
     return f"Check the agent mailbox: read {request_path} (sent by {sender} via {transport})."
 
 
+def _codex_thread(contact: str) -> str | None:
+    match = _CODEX_CONTACT.fullmatch(contact.strip())
+    if not match:
+        return None
+    thread = match.group(1).strip()
+    return thread if thread and not thread.startswith("-") else None
+
+
 def _run(command: Sequence[str], cwd: Path, timeout: float) -> subprocess.CompletedProcess[str]:
     return subprocess.run(list(command), cwd=str(cwd), capture_output=True, text=True,
                           encoding="utf-8", errors="replace", timeout=timeout, check=False)
@@ -83,11 +91,8 @@ def _record_transport(state_root: Path, result: NotifyResult, message_id: str) -
 
 def _send_codex(contact: str, request_path: Path, sender: str, cwd: Path, timeout: float,
                 runner: Callable[[Sequence[str], Path, float], subprocess.CompletedProcess[str]]) -> NotifyResult:
-    match = _CODEX_CONTACT.fullmatch(contact.strip())
-    if not match:
-        return NotifyResult("", "manual", False, f"{_pointer(request_path, sender, 'manual relay')} unsupported Codex contact: {contact}")
-    thread = match.group(1).strip()
-    if thread.startswith("-") or not thread:
+    thread = _codex_thread(contact)
+    if thread is None:
         return NotifyResult("", "manual", False, f"{_pointer(request_path, sender, 'manual relay')} unsupported Codex contact: {contact}")
     pointer = _pointer(request_path, sender, "codex queue")
     try:
@@ -138,8 +143,12 @@ def notify_message(
                 _pointer(request_path, request.value.sender, "manual relay"),
             )
         elif _CODEX_CONTACT.fullmatch(contact.strip()):
+            thread = _codex_thread(contact)
             if send:
                 result = _send_codex(contact, request_path, request.value.sender, project_root, timeout, runner)
+            elif thread is None:
+                result = NotifyResult(recipient, "manual", False,
+                                      f"{_pointer(request_path, request.value.sender, 'manual relay')} would NOT send: unsupported Codex contact: {contact}")
             else:
                 result = NotifyResult("", "dry-run", False, f"would send via {contact}: {_pointer(request_path, request.value.sender, 'codex queue')}")
             result = NotifyResult(recipient, result.method, result.submitted, result.detail)
@@ -160,6 +169,9 @@ def notify_message(
                 recipient, "manual", False,
                 f"{_pointer(request_path, request.value.sender, 'manual relay')} unsupported contact target={contact}",
             )
+        if not result.submitted and not result.detail.startswith("Check the agent mailbox:"):
+            result = NotifyResult(result.recipient, result.method, result.submitted,
+                                  f"{_pointer(request_path, request.value.sender, 'manual relay')} {result.detail}")
         if send:
             _record_transport(state_root, result, message_id)
         results.append(result)
