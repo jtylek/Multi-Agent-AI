@@ -120,6 +120,36 @@ the text only points at the mailbox and names the sender; it never carries instr
 approvals. Methods that start, steer or inject turns are not used. The manual user-prompt
 fallback remains for when discovery or queueing fails. Details: docs/protocol/agent-messaging.md.
 
+## D15. Next direction: `docs/next-milestone.md` (M1 real multi-agent execution): Decided (user), 2026-10-19
+
+[next-milestone.md](next-milestone.md) is the recommended current implementation direction. It
+is a recommendation, not a specification: where it conflicts with `AGENTS.md`, this file or the
+protocol documents, those win, and the conflict is resolved by an explicit change to them.
+
+What is adopted: the next milestone is "M1 — Real Multi-Agent Execution", one complete
+Windows-native run in which a coordinator delegates to real Claude, Codex and Copilot workers,
+reviews and independently verifies their work, integrates it on an isolated branch and asks the
+user before touching the user's branch. Order: agent registry and reservation enforcement,
+worktree lifecycle manager, Claude managed-worker adapter, real-provider smoke tests, a
+verification engine owned by the orchestrator. Adaptive routing and cost optimization (its
+"M2") and the VS Code UI (its "M3") come after M1. The architecture is not redesigned (D3
+stays).
+
+How the document is read:
+
+- Failure classes keep the names already in code (`auth_error`, `quota_exhausted`, `cap_reached`,
+  `provider_error`, `git_policy_violation`, ...); the document's category list is a guide to
+  the policies, not a rename.
+- Epesi/Laravel terms in it (for example "Premium modules") are illustrative; project-specific
+  checks belong in project profiles (D12).
+- Its milestone numbering differs from the README's "Proposed milestones"; the README is
+  reconciled in a separate change.
+- The real-provider smoke tests use provider quota. Each real run needs the user's explicit
+  approval, and the rule that probes make no real deliveries or limit tests stays in force
+  until then.
+- Prerequisite already planned: T18 (CLI version detection), because quota detection is off
+  while no CLI version is known.
+
 ## Open
 
 - **O2. Registry.** Format specified (`formats.md` section 6); implementation, reservation
