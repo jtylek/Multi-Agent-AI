@@ -4,6 +4,7 @@ Nothing here launches a process.
 """
 
 from pathlib import Path
+from dataclasses import replace
 
 import pytest
 
@@ -208,6 +209,14 @@ def test_prompt_implement_mode_differs_only_in_mode_text():
 
 def test_verification_command_is_the_last_inline_command():
     assert verification_command(make_plan(), "T1") == r".venv\Scripts\python -m pytest -q"
+
+
+def test_verification_command_uses_matching_per_subtask_entry():
+    plan = make_plan()
+    plan = replace(plan, body=plan.body + "\n## Verification\n"
+                   "verify: T1: `python -m pytest tests/test_one.py -q`\n"
+                   "verify: T2: `python -m pytest tests/test_two.py -q`\n")
+    assert verification_command(plan, "T1") == "python -m pytest tests/test_one.py -q"
 
 
 # --- failure classification (table-driven) -----------------------------------------------------

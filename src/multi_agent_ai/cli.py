@@ -1,4 +1,4 @@
-"""Command line: ``multi-agent-ai init | inspect | index | doctor | worker run`` (also ``python -m multi_agent_ai``)."""
+"""Command line: ``multi-agent-ai init | inspect | index | doctor | verify | worker run``."""
 
 from __future__ import annotations
 
@@ -60,6 +60,25 @@ def _parser() -> argparse.ArgumentParser:
     doctor.add_argument("--state-root", default=None,
                         help="state root, absolute or relative to the project root (default: .multi-agent-ai)")
     doctor.add_argument("--json", action="store_true", help="machine-readable output")
+    verify = sub.add_parser("verify", help="independently verify a worktree using declared argv commands")
+    verify.add_argument("--worktree", required=True, help="Git worktree to verify")
+    verify.add_argument("--command", action="append", nargs="+", required=True,
+                        help="one shell-free argv command; repeat for multiple commands")
+    verify.add_argument("--preflight", action="append", nargs="+", default=[],
+                        help="preflight argv command; failure is environment_error")
+    verify.add_argument("--expected-file", action="append", default=[], help="file expected in the worktree")
+    expected = verify.add_mutually_exclusive_group()
+    expected.add_argument("--expected-clean", action="store_true", dest="expected_clean")
+    expected.add_argument("--expected-dirty", action="store_false", dest="expected_clean")
+    verify.set_defaults(expected_clean=None)
+    verify.add_argument("--expected-commit", default=None)
+    verify.add_argument("--timeout", type=float, default=300.0)
+    verify.add_argument("--run-dir", default=None)
+    verify.add_argument("--env", action="append", default=[], metavar="NAME",
+                        help="environment variable name allowed through to commands")
+    verify.add_argument("--project-root", default=".", help="project root for the default run directory")
+    verify.add_argument("--state-root", default=None, help="state root for the default run directory")
+    verify.add_argument("--json", action="store_true", help="machine-readable output")
     _add_worker_parser(sub)
     return parser
 
@@ -79,6 +98,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             sys.stdout.write(doctor.format_text(checks))
         return doctor.exit_code(checks)
+    if args.command == "verify":
+        from pathlib import Path
+
+        from .verify import CommandSpec, VerificationSpec, verify
+
+        spec = VerificationSpec(
+            commands=tuple(CommandSpec(tuple(command)) for command in args.command),
+            preflight=tuple(CommandSpec(tuple(command)) for command in args.preflight),
+            expected_files=tuple(args.expected_file), expected_clean=args.expected_clean,
+            expected_commit=args.expected_commit, timeout=args.timeout, environment=tuple(args.env),
+        )
+        root = resolve_state_root(args.project_root, args.state_root)
+        result = verify(Path(args.worktree), spec, run_dir=args.run_dir or root.path / "runs" / "verify" / "cli")
+        if args.json:
+            print(json.dumps(result.as_dict(), indent=2, ensure_ascii=False))
+        else:
+            print(f"{result.status}: {result.run_dir} ({result.duration_seconds:.3f}s)")
+            if result.error:
+                print(result.error, file=sys.stderr)
+        return 0 if result.ok else 1
     if args.command == "worker":  # T12 block: see _add_worker_parser / _worker_main below
         return _worker_main(args)
     project_root = resolve_state_root(args.project_root).path.parent
