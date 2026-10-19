@@ -59,6 +59,16 @@ The coordinator is responsible for reasoning-heavy work:
 
 The Python service remains the source of truth for execution state so that a job can survive a coordinator session ending or being restarted.
 
+### Current workflow recommendation: who coordinates
+
+This is a recommendation for the present workflow, **not** a permanent vendor-specific architecture decision. The coordinator stays a vendor-neutral role (section 2), and the user can assign it to any agent.
+
+- **Claude Code is preferred as coordinator today**, because its existing sessions can be reached directly (native agent discovery and `SendMessage`, section 8).
+- **Codex is a strong option** when the workers are in the same reachable Codex-managed hierarchy, or when its chat is addressable through `codex queue`.
+- **Copilot is better suited as a worker or reviewer** for now, because delivery to a specific Copilot chat is less certain (section 8). The recipient's acknowledgment file is the only proof.
+
+Revisit this when reachability changes or the orchestrator can launch and address managed coordinators itself.
+
 ## 3. Windows-first, VS Code-first
 
 The primary supported environment is **Windows 10/11**, running natively.
