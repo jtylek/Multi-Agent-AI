@@ -160,7 +160,7 @@ for M1 so the orchestrator and worker worktrees share one state-root copy, with 
 it is not versioned or shared between clones, and `init` should print the path so newcomers can
 find it. A later milestone may add a versioned project-level profile with explicit precedence.
 
-## D17. Worktree lifecycle conventions: Accepted (coordinator), 2026-10-20
+## D18. Worktree lifecycle conventions: Accepted (coordinator), 2026-10-20
 
 The workspace manager (T23, `workspace.py`, `multi-agent-ai workspace`) follows these rules.
 Git stays the source of truth; `tasks/<task-id>/workspaces.json` is a derived record only the

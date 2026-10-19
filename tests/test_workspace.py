@@ -55,7 +55,7 @@ def only_tmp_git(monkeypatch, tmp_path):
 
     monkeypatch.setattr(gitops, "git", guarded)
     yield
-    # D17: the manager never deletes a branch, whatever the test did
+    # D18: the manager never deletes a branch, whatever the test did
     deletes = [a for a in calls if a[:1] == ("branch",) and any(x in ("-d", "-D", "--delete") for x in a)]
     assert not deletes, f"the manager deleted a branch: {deletes}"
 
@@ -218,7 +218,7 @@ def test_failure_after_worktree_add_removes_only_the_worktree_and_a_retry_succee
     assert code_of(lambda: ctx.subtask("A")) == "git_failed"
     monkeypatch.setattr(gitops, "worktree_info", real)
     assert not (ctx.wt_root / "My Project-A").exists()
-    assert git(ctx.project, "branch", "--list", f"task/{TASK}/A").strip() != ""  # D17: the branch is kept
+    assert git(ctx.project, "branch", "--list", f"task/{TASK}/A").strip() != ""  # D18: the branch is kept
     assert "A" not in ws.read_records(ctx.state, TASK)
     assert len(git(ctx.project, "worktree", "list").splitlines()) == 1
     retry = ctx.subtask("A")  # the leftover branch is at the expected base and has no worktree

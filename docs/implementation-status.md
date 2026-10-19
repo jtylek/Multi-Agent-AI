@@ -50,7 +50,7 @@ listed below is planned, not implemented.
   Statuses: `ok`, `warn`, `fail`, `not checked`; a missing CLI is a warning unless none is
   installed; exit 1 only when a check fails.
 - Worktree lifecycle manager (T23, `workspace.py`, CLI `workspace create-integration | create |
-  check | list | integrate | remove | retain`, decision D17): integration branch and one
+  check | list | integrate | remove | retain`, decision D18): integration branch and one
   branch plus worktree per subtask with base and path validation, protected-branch refusal,
   dirty and locked detection, review-gated `--no-ff` integration in dependency order that stops at
   the first conflict, removal of completed worktrees only (branches are never deleted) and

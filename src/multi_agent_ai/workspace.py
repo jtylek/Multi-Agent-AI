@@ -348,7 +348,7 @@ def _create(project_root: Path, state: StateRoot, task_id: str, name: str, branc
 
 
 def _rollback(project_root: Path, path: Path) -> None:
-    """Remove only the half-made worktree of a failed create. The branch is left alone (D17): a
+    """Remove only the half-made worktree of a failed create. The branch is left alone (D18): a
     retry accepts an existing branch at the expected base that has no worktree."""
     try:
         if any(gitops.same_path(b.get("worktree", ""), path) for b in _worktree_list(project_root)):
