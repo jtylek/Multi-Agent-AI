@@ -263,12 +263,12 @@ project's `.gitignore`; exclude the state root from version control yourself.
 
 ## Proposed milestones
 
-- **M0 — Bootstrap:** README, protocol documentation, architecture decisions, initial tests and project layout.
-- **M1 — Windows runtime:** reliable CLI discovery, managed agent execution, logs, cancellation, and failure classification.
-- **M2 — Messaging and sessions:** registry, mailbox/acknowledgments, notification bridges, multiple managed sessions, restart handoffs.
-- **M3 — Coordinator and parallel tasks:** planning, dependency graph, file reservations, worktrees, reviews, and integration.
-- **M4 — Adaptive routing:** usage ledger, cost/reliability scoring, escalation policies, provider health.
-- **M5 — VS Code UX:** task board, chat/job handoff, progress, review, and approval controls.
+The order follows decision D15 and [docs/next-milestone.md](docs/next-milestone.md).
+
+- **M0 — Foundation (done):** protocol and file formats, typed models, mailbox, task board, state root and derived SQLite index, CLI, reachability discovery, notification transport, Windows process runtime, managed Codex and Copilot workers with failure classification and usage-limit handling. Tested with fake executables only.
+- **M1 — Real multi-agent execution (current):** agent registry and reservation enforcement, worktree lifecycle manager, Claude managed-worker adapter, real-provider smoke tests, an orchestrator-owned verification engine, and one end-to-end job with concurrent workers, cross-agent review and dependency-ordered integration.
+- **M2 — Adaptive routing and cost optimization:** usage ledger, cost/reliability scoring, escalation policies, provider health.
+- **M3 — VS Code UX:** task board, chat/job handoff, progress, review, and approval controls.
 
 ## Example use cases
 
