@@ -18,6 +18,7 @@ from typing import Any, TypeVar
 
 from .document import atomic_write
 from .models import OPERATIONAL_RECORDS
+from .profile import ensure_starter_profile
 
 DEFAULT_STATE_ROOT = ".multi-agent-ai"
 CONFIG_FILE = "config.json"
@@ -39,6 +40,10 @@ class StateRoot:
     @property
     def tasks(self) -> Path:
         return self.path / "tasks"
+
+    @property
+    def registry(self) -> Path:
+        return self.path / "registry"
 
     @property
     def config_path(self) -> Path:
@@ -65,16 +70,19 @@ def init_state_root(project_root: Path | str = ".", state_root: Path | str | Non
     root = resolve_state_root(project_root, state_root)
     root.messages.mkdir(parents=True, exist_ok=True)
     root.tasks.mkdir(parents=True, exist_ok=True)
+    root.registry.mkdir(parents=True, exist_ok=True)
     config = {
         "format": FORMAT,
         "project_root": str(Path(project_root).resolve()),
         "state_root": str(root.path),
         "database": DATABASE_FILE,
+        "profile": str(root.path / "project-profile.toml"),
     }
     text = json.dumps(config, indent=2) + "\n"
     if not root.config_path.exists() or root.config_path.read_text(encoding="utf-8") != text:
         atomic_write(root.config_path, text)
     StateIndex.open(root.database_path).close()
+    ensure_starter_profile(project_root, root.path)
     return root
 
 

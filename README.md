@@ -178,8 +178,9 @@ cd ..
 .venv\Scripts\multi-agent-ai init --project-root demo
 ```
 
-This creates `demo\.multi-agent-ai\` (messages, tasks and a SQLite index). Keep that folder out
-of Git, for example by adding it to `demo\.gitignore`.
+This creates `demo\.multi-agent-ai\` (messages, tasks, a SQLite index, and a starter
+`project-profile.toml`). Keep that folder out of Git, for example by adding it to
+`demo\.gitignore`; the starter profile is a placeholder and the engine does not read it yet.
 
 **4. Write a tiny plan.** Save the following as `demo\.multi-agent-ai\tasks\demo\plan.md`
 (create the `tasks\demo` folders). The table is what the tool reads; the file formats are in
@@ -249,6 +250,9 @@ py -3.12 -m venv .venv
 .venv\Scripts\multi-agent-ai init --project-root <target-project>
 .venv\Scripts\multi-agent-ai inspect --project-root <target-project>
 
+# readiness check: Python, Git, provider CLIs (found, version), state root; read-only, no provider call
+.venv\Scripts\multi-agent-ai doctor --project-root <target-project>
+
 # one read-only review by a managed Codex worker; without --execute this is a dry run
 # (checks and prints the command, starts nothing); --execute launches it and uses provider quota
 .venv\Scripts\multi-agent-ai worker run --project-root <target-project> --provider codex `
@@ -260,6 +264,8 @@ The state root defaults to `.multi-agent-ai/` in the target project's primary ch
 SQLite lives at `<state-root>/state.sqlite3` and is only an index of the coordination files,
 which remain the source of truth. `inspect` is read-only. `init` does not edit the target
 project's `.gitignore`; exclude the state root from version control yourself.
+Use `multi-agent-ai registry --state-root <path>` to inspect registered agents, or add
+`--files <path>` to check a proposed reservation without starting a worker.
 
 ## Proposed milestones
 

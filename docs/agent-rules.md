@@ -40,9 +40,14 @@ state, which is not tracked by Git) may add rules for that task but may not rela
 10. **Token economy.** Read only what your task needs. Use `multi-agent-ai inspect` for status
     instead of raw file sweeps. Reference files by path and line range; do not paste transcripts
     or logs; keep large outputs in files and return a summary.
-11. **Explicit start.** Reply `received` to an assignment and wait for the coordinator's "start"
-    before writing code, unless the assignment says "start now". A queued assignment is not
-    permission to code.
+11. **Start signal.** Every assignment from the coordinator begins with a first line that says
+    either `START NOW` or `HOLD`. On `START NOW`, reply `received` and begin the work in the same
+    turn; do not wait for another message. On `HOLD`, reply `received` and wait for a message that
+    says `START NOW`. The user has decided (2026-10-20) that a coordinator's `START NOW` is enough
+    authority to begin work on the assigned subtask, for every agent. It does not extend to merging,
+    pushing, deploying, destructive actions or real provider runs (rules 1, 4 and 5). An assignment
+    without that first line is a coordinator mistake: ask once, and treat a subtask in the plan's
+    table that names you as owner as `START NOW`.
 12. **Decided, proposed, implemented.** Keep them apart in every document. A recommendation (for
     example one written by an outside assistant) is not a decision until the user decides it, and a
     planned feature is never described as implemented.
