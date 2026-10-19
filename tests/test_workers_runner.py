@@ -149,8 +149,8 @@ class Env:
         values.update(kw)
         return WorkerRequest(**values)
 
-    def run(self, resolver=None, **kw):
-        return run_worker(self.request(**kw), env=self.env, resolver=resolver)
+    def run(self, resolver=None, cli_version=None, **kw):
+        return run_worker(self.request(**kw), env=self.env, resolver=resolver, cli_version=cli_version)
 
     def direct_resolver(self):
         """Run the fake as an exe (python + script) so argv is not limited by cmd.exe."""
@@ -353,6 +353,96 @@ def test_not_a_git_worktree_is_environment(env):
     assert env.run(worktree=plain).failure_class == fc.ENVIRONMENT
 
 
+# --- usage limits (T15; synthetic provider output) ----------------------------------------------
+
+
+@pytest.fixture
+def trusted_versions(monkeypatch):
+    """List version "t1" for every detector table; the shipped tables list none yet."""
+    from multi_agent_ai.workers import quota
+
+    for provider, (detector, _) in quota.DETECTORS.items():
+        monkeypatch.setitem(quota.DETECTORS, provider, (detector, frozenset({"t1"})))
+
+
+CODEX_LIMIT = ('{"type":"thread.started","thread_id":"thr-9"}\n'
+               '{"type":"token_count","rate_limits":{"rate_limit_reached_type":"primary",'
+               '"primary":{"used_percent":100,"resets_at":1792000000}}}\n')
+
+
+def test_codex_quota_exhausted_records_blocker_limit_and_resume(env, trusted_versions):
+    env.install("codex")
+    env.configure(stdout=CODEX_LIMIT, exit=1, write={"src/partial.py": "x = 1\n"})
+    outcome = env.run(mode="implement", model="gpt-5", cli_version="t1")
+    assert outcome.failure_class == fc.QUOTA_EXHAUSTED and outcome.commit is None
+    limit = outcome.result["limit"]
+    assert limit["kind"] == "quota_exhausted" and limit["session"] == "thr-9"
+    assert limit["resume_command"] == "codex exec resume thr-9"
+    assert limit["head_at_launch"] == env.base and limit["status_at_launch"] == []
+    assert limit["reset"] and limit["reset_text"].endswith("UTC (reported)")
+    assert limit["counts_toward_success_rate"] is False and limit["raw_message"]
+    assert "--ephemeral" not in env.record()["argv"]  # implement sessions stay resumable
+    status = read_statuses(task_dir(env))["codex-w1"].value
+    assert status.state == "blocked"
+    assert status.blockers.startswith("quota: codex (gpt-5), resets 2026-") and status.blockers.endswith("(reported)")
+    with StateIndex.open(env.root.database_path) as index:
+        details = index.attempt_details(outcome.attempt_id)
+    assert details["failure_class"] == "quota_exhausted" and details["limit"]["session"] == "thr-9"
+    assert no_acks_anywhere(env)
+
+
+def test_unknown_reset_is_reported_as_unknown(env, trusted_versions):
+    env.install("codex")
+    env.configure(stdout='{"type":"token_count","rate_limits":{"spend_control_reached":true}}\n', exit=1)
+    outcome = env.run(cli_version="t1")
+    assert outcome.failure_class == fc.QUOTA_EXHAUSTED and outcome.result["limit"]["reset"] is None
+    status = read_statuses(task_dir(env))["codex-w1"].value
+    assert status.blockers == "quota: codex (provider default), reset unknown"
+
+
+def test_copilot_cap_uses_the_cap_prefix(env, trusted_versions):
+    env.install("copilot")
+    env.configure(stderr="Stopped: --max-ai-credits 5 reached", exit=1)
+    outcome = env.run(env.direct_resolver(), provider="copilot", agent_id="copilot-w1", cli_version="t1")
+    assert outcome.failure_class == fc.CAP_REACHED
+    assert outcome.result["limit"]["resume_command"].startswith("copilot --resume ")
+    status = read_statuses(task_dir(env))["copilot-w1"].value
+    assert status.blockers.startswith("cap: copilot (provider default), reset unknown")
+
+
+def test_bare_429_is_a_provider_error_and_a_plain_failure_stays_nonzero_exit(env):
+    env.install("codex")
+    env.configure(stdout=CODEX_OK, stderr="HTTP 429 Too Many Requests", exit=1)
+    throttled = env.run()
+    assert throttled.failure_class == fc.PROVIDER_ERROR and throttled.result["limit"]["counts_toward_success_rate"]
+    env.configure(stdout=CODEX_OK, stderr="something broke", exit=3)
+    assert env.run().failure_class == fc.NONZERO_EXIT
+
+
+def test_run_worker_without_a_known_cli_version_never_reports_quota(env, trusted_versions):
+    env.install("codex")
+    env.configure(stdout=CODEX_LIMIT, exit=1)
+    outcome = env.run()  # no cli_version: the live path knows none and never probes
+    assert outcome.failure_class == fc.PROVIDER_ERROR
+    assert "unknown" in outcome.result["limit"]["reason"] and outcome.result["limit"]["reset"] is None
+    status = read_statuses(task_dir(env))["codex-w1"].value
+    assert status.blockers.startswith("provider_error") and not status.blockers.startswith("quota:")
+    env.configure(stdout=CODEX_LIMIT, exit=1)
+    assert env.run(agent_id="codex-w2", cli_version="9.9.9").failure_class == fc.PROVIDER_ERROR  # unlisted
+
+
+def test_shipped_tables_make_every_real_run_provider_error(env):
+    env.install("codex")
+    env.configure(stdout=CODEX_LIMIT, exit=1)
+    assert env.run(cli_version="0.163.0").failure_class == fc.PROVIDER_ERROR  # no version is listed yet
+
+
+def test_a_limit_message_on_a_successful_exit_is_not_reclassified(env):
+    env.install("codex")
+    env.configure(stdout=CODEX_LIMIT, final=FINAL, exit=0)
+    assert env.run().failure_class is None
+
+
 # --- process failures ---------------------------------------------------------------------------
 
 
@@ -494,9 +584,50 @@ def test_cli_worker_run_with_fake_on_path(env, monkeypatch, capsys):
     monkeypatch.setenv("PATH", f"{env.fake_dir}{os.pathsep}{git_dir}")
     code = main(["worker", "run", "--provider", "codex", "--task", "demo", "--subtask", "T1", "--agent-id",
                  "codex-w1", "--mode", "review", "--worktree", str(env.worktree), "--project-root",
-                 str(env.primary), "--timeout", "60"])
+                 str(env.primary), "--timeout", "60", "--execute"])
     out = json.loads(capsys.readouterr().out)
     assert code == 0 and out["failure_class"] is None and out["review_file"]
+
+
+def _snapshot_tree(root: Path) -> list[str]:
+    return sorted(str(p.relative_to(root)) for p in root.rglob("*"))
+
+
+def test_cli_worker_run_is_a_dry_run_by_default(env, monkeypatch, capsys):
+    env.install("codex")
+    env.configure(stdout=CODEX_OK, final="verdict: agreed\n")
+    git_dir = str(Path(GIT).parent)
+    monkeypatch.setenv("PATH", f"{env.fake_dir}{os.pathsep}{git_dir}")
+    before = _snapshot_tree(env.root.path)
+    code = main(["worker", "run", "--provider", "codex", "--task", "demo", "--subtask", "T1", "--agent-id",
+                 "codex-w1", "--mode", "review", "--worktree", str(env.worktree), "--project-root",
+                 str(env.primary)])
+    captured = capsys.readouterr()
+    out = json.loads(captured.out)
+    assert code == 0 and out["dry_run"] is True and out["problems"] == []
+    assert out["argv"] and out["prompt_sha256"] and out["profile"] == "codex-review"
+    assert "--execute" in captured.err
+    assert _snapshot_tree(env.root.path) == before  # no runs dir, no status file
+    assert not (env.fake_dir / "fake-record.json").exists()  # the provider was never started
+
+
+def test_cli_dry_run_reports_problems_without_writing(env, monkeypatch, capsys):
+    env.install("codex")
+    git_dir = str(Path(GIT).parent)
+    monkeypatch.setenv("PATH", f"{env.fake_dir}{os.pathsep}{git_dir}")
+    before = _snapshot_tree(env.root.path)
+    code = main(["worker", "run", "--provider", "codex", "--task", "demo", "--subtask", "T1", "--agent-id",
+                 "codex-w1", "--mode", "review", "--worktree", str(env.worktree), "--project-root",
+                 str(env.primary), "--commit", "deadbeefdeadbeef"])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1 and out["problems"]
+    assert _snapshot_tree(env.root.path) == before
+
+
+def test_cli_dry_run_still_rejects_bad_requests_with_exit_2(env, capsys):
+    code = main(["worker", "run", "--provider", "codex", "--task", "demo", "--subtask", "T1", "--agent-id",
+                 "lead", "--mode", "review", "--worktree", str(env.worktree), "--project-root", str(env.primary)])
+    assert code == 2
 
 
 def test_cli_rejects_bad_requests_with_exit_2(env, capsys):

@@ -48,7 +48,7 @@ def test_codex_review_argv_exact():
 
 def test_codex_implement_argv_exact_with_model():
     inv = CodexAdapter().build_invocation(request("implement", model="gpt-5.5"))
-    assert list(inv.args) == ["exec", "-C", str(WT), "-s", "workspace-write", "--ephemeral", "--color", "never",
+    assert list(inv.args) == ["exec", "-C", str(WT), "-s", "workspace-write", "--color", "never",
                               "--json", "-o", str(RUN / "final-message.md"), "-m", "gpt-5.5", "-"]
     assert inv.profile == "codex-implement"
 
@@ -231,6 +231,9 @@ CASES = [
     (dict(exit_code=2, stderr="error: unexpected argument '--full-auto' found"), fc.INVALID_ARGUMENTS),
     (dict(exit_code=1, stderr="error: unknown option '--foo'"), fc.INVALID_ARGUMENTS),
     (dict(exit_code=3, stderr="something broke"), fc.NONZERO_EXIT),
+    (dict(exit_code=1, limit="quota_exhausted"), fc.QUOTA_EXHAUSTED),
+    (dict(exit_code=1, limit="cap_reached"), fc.CAP_REACHED),
+    (dict(exit_code=1, limit="provider_error"), fc.PROVIDER_ERROR),
     (dict(exit_code=0, malformed=True), fc.MALFORMED_OUTPUT),
     (dict(exit_code=0, mode="implement", changed_files=0), fc.NO_CHANGES),
     (dict(exit_code=0, mode="implement", changed_files=2, commit_failed=True), fc.COMMIT_FAILED),

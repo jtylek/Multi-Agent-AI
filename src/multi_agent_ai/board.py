@@ -373,6 +373,16 @@ def check_status(status: Status, plan: Plan | None, now: datetime) -> tuple[list
         stale = is_stale(parse_timestamp(status.updated), now)
     except ValueError:
         stale = None
+    if stale and status.state == "blocked":
+        from .workers.quota import quota_block_active  # lazy: workers.runner imports this module
+
+        try:
+            waiting = quota_block_active(status.blockers, parse_timestamp(status.updated).value, now)
+        except ValueError:
+            waiting = False
+        if waiting:
+            warnings.append(f"quota block (updated {status.updated}): waiting for the provider limit, not stale")
+            stale = False
     if stale:
         if status.state == WAITING_FOR_USER:
             warnings.append(f"stale worker (updated {status.updated}): reservation released, not failed")

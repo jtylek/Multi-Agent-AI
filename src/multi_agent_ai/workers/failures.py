@@ -17,18 +17,21 @@ REVIEW_MODIFIED_FILES = "review_modified_files"
 GIT_POLICY_VIOLATION = "git_policy_violation"
 TIMEOUT = "timeout"
 UNSUPPORTED_MODEL = "unsupported_model"
-AUTH = "auth"
+AUTH = "auth_error"
 PERMISSION_DENIED = "permission_denied"
 INVALID_ARGUMENTS = "invalid_arguments"
 NONZERO_EXIT = "nonzero_exit"
 MALFORMED_OUTPUT = "malformed_output"
 NO_CHANGES = "no_changes"
 COMMIT_FAILED = "commit_failed"
+QUOTA_EXHAUSTED = "quota_exhausted"
+CAP_REACHED = "cap_reached"
+PROVIDER_ERROR = "provider_error"
 
 FAILURE_CLASSES = (
     PROFILE_UNCONFIGURED, ENVIRONMENT, LAUNCH_ERROR, REVIEW_MODIFIED_FILES, GIT_POLICY_VIOLATION,
     TIMEOUT, UNSUPPORTED_MODEL, AUTH, PERMISSION_DENIED, INVALID_ARGUMENTS, NONZERO_EXIT,
-    MALFORMED_OUTPUT, NO_CHANGES, COMMIT_FAILED,
+    MALFORMED_OUTPUT, NO_CHANGES, COMMIT_FAILED, QUOTA_EXHAUSTED, CAP_REACHED, PROVIDER_ERROR,
 )
 """In precedence order: the first that applies is the primary class."""
 
@@ -70,6 +73,9 @@ class Evidence:
     malformed: bool = False
     changed_files: int = 0
     commit_failed: bool = False
+    limit: str | None = None
+    """Kind of a positively identified provider limit (quota_exhausted, cap_reached) or a throttle-like
+    provider_error, from :mod:`multi_agent_ai.workers.quota`. Never inferred from the exit code."""
 
 
 def match_output(stdout: str, stderr: str) -> str | None:
@@ -84,8 +90,9 @@ def classify(e: Evidence) -> str | None:
     Rules, in order: profile unconfigured; environment (pre-launch checks); launch error
     (executable missing/not startable); arguments refused before launch; review run that changed the worktree; a Git operation
     by the worker (HEAD/branch moved, new ref at HEAD); timeout; nonzero exit refined by
-    output patterns (unsupported model, auth, permission denied, invalid arguments, else
-    nonzero exit); exit 0 with output not in the expected format; implement run without
+    a positively identified provider limit (quota_exhausted, cap_reached), then output patterns
+    (unsupported model, auth, permission denied, invalid arguments), then provider_error for
+    throttling, else nonzero exit); exit 0 with output not in the expected format; implement run without
     changes; the orchestrator's commit failed.
     """
     if e.profile_unconfigured:
@@ -103,7 +110,9 @@ def classify(e: Evidence) -> str | None:
     if e.timed_out:
         return TIMEOUT
     if e.exit_code != 0:
-        return match_output(e.stdout, e.stderr) or NONZERO_EXIT
+        if e.limit in (QUOTA_EXHAUSTED, CAP_REACHED):
+            return e.limit
+        return match_output(e.stdout, e.stderr) or (PROVIDER_ERROR if e.limit == PROVIDER_ERROR else NONZERO_EXIT)
     if e.malformed:
         return MALFORMED_OUTPUT
     if e.mode == "implement" and e.changed_files == 0:
