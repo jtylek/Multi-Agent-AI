@@ -223,6 +223,7 @@ must equal `agent`.
 | `last-commit` | yes | SHA or `none` |
 | `tests` | yes | scoped tests and results, or `none run` |
 | `blockers` | yes | text or `none` |
+| `contact` | no | how other agents can notify this agent: `codex queue --thread <uuid-or-name>`, `code chat`, `claude SendMessage <session-name>`, or `user prompt`. The value must not start with `-`. Until the registry exists this is where `multi-agent-ai notify` reads it; a registry `contact:` takes precedence later. |
 | `updated` | yes | timestamp (minute precision) |
 
 Staleness (two independent checks):
