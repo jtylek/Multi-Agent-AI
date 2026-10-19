@@ -260,6 +260,8 @@ The state root defaults to `.multi-agent-ai/` in the target project's primary ch
 SQLite lives at `<state-root>/state.sqlite3` and is only an index of the coordination files,
 which remain the source of truth. `inspect` is read-only. `init` does not edit the target
 project's `.gitignore`; exclude the state root from version control yourself.
+Use `multi-agent-ai registry --state-root <path>` to inspect registered agents, or add
+`--files <path>` to check a proposed reservation without starting a worker.
 
 ## Proposed milestones
 

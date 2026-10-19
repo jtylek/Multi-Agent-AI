@@ -19,11 +19,12 @@ from multi_agent_ai import winproc
 from multi_agent_ai.board import read_statuses, render_subtask_table, write_plan, write_status
 from multi_agent_ai.cli import main
 from multi_agent_ai.document import read_document
+from multi_agent_ai.grammar import format_timestamp
 from multi_agent_ai.mailbox import write_ack, write_request
 from multi_agent_ai.models import Ack, Attempt, Plan, Request, Status, Subtask
 from multi_agent_ai.state import StateIndex, init_state_root
 from multi_agent_ai.workers import failures as fc
-from multi_agent_ai.workers.runner import UsageError, WorkerRequest, run_worker
+from multi_agent_ai.workers.runner import UsageError, WorkerRequest, preview_worker, run_worker
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows runtime")
 
@@ -446,7 +447,7 @@ def test_a_limit_message_on_a_successful_exit_is_not_reclassified(env):
 def test_worker_refuses_active_overlapping_reservation_before_run(env):
     registry = env.root.path / "registry" / "other.md"
     registry.write_text(
-        "agent: other\nstarted: 2026-10-20 09:00\nupdated: 2026-10-20 10:00\n"
+        f"agent: other\nstarted: {format_timestamp()}\nupdated: {format_timestamp()}\n"
         "task: other-task\nfiles: src/\nstatus: working\n",
         encoding="utf-8",
     )
@@ -454,6 +455,18 @@ def test_worker_refuses_active_overlapping_reservation_before_run(env):
     with pytest.raises(UsageError, match=r"reservation conflict.*other.*src"):
         env.run()
     assert set(env.root.path.rglob("*")) == before
+
+
+def test_preview_worker_refuses_active_overlapping_reservation(env):
+    registry = env.root.path / "registry" / "other.md"
+    now = format_timestamp()
+    registry.write_text(
+        f"agent: other\nstarted: {now}\nupdated: {now}\n"
+        "task: other-task\nfiles: src/\nstatus: working\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(UsageError, match=r"reservation conflict.*other.*src"):
+        preview_worker(env.request(), env=env.env)
 
 
 # --- process failures ---------------------------------------------------------------------------
