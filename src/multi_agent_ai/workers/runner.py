@@ -296,19 +296,7 @@ def run_worker(
         return finish(str(exc))
     run.result["git"] = {"branch": info.branch, "head_before": info.head}
     if req.mode == "implement":
-        live = {*DEFAULT_LIVE_BRANCHES, *req.live_branches}
-        expected = f"task/{req.task_id}/{req.subtask_id}"
-        refusal = None
-        if gitops.same_path(req.worktree, req.project_root) or not info.is_linked_worktree:
-            refusal = "implement mode refuses the primary checkout; use a linked worktree"
-        elif info.branch is None:
-            refusal = "implement mode needs a branch; the worktree has a detached HEAD"
-        elif info.branch in live:
-            refusal = f"implement mode refuses live/protected branch {info.branch!r}"
-        elif info.branch != expected:
-            refusal = f"implement mode expects branch {expected!r}, worktree is on {info.branch!r}"
-        elif before.status:
-            refusal = f"worktree is dirty before the run ({len(before.status)} entries); clean it first"
+        refusal = _implement_refusal(req, info, before)
         if refusal:
             evidence["environment_error"] = True
             return finish(refusal)
@@ -425,6 +413,112 @@ def run_worker(
             evidence["commit_failed"] = True
             detail = str(exc)
     return finish(detail)
+
+
+def _implement_refusal(req: WorkerRequest, info: gitops.WorktreeInfo, before: Any) -> str | None:
+    """Why implement mode must not start in this worktree (None when it may)."""
+    live = {*DEFAULT_LIVE_BRANCHES, *req.live_branches}
+    expected = f"task/{req.task_id}/{req.subtask_id}"
+    if gitops.same_path(req.worktree, req.project_root) or not info.is_linked_worktree:
+        return "implement mode refuses the primary checkout; use a linked worktree"
+    if info.branch is None:
+        return "implement mode needs a branch; the worktree has a detached HEAD"
+    if info.branch in live:
+        return f"implement mode refuses live/protected branch {info.branch!r}"
+    if info.branch != expected:
+        return f"implement mode expects branch {expected!r}, worktree is on {info.branch!r}"
+    if before.status:
+        return f"worktree is dirty before the run ({len(before.status)} entries); clean it first"
+    return None
+
+
+def preview_worker(
+    req: WorkerRequest,
+    *,
+    adapter: ProviderAdapter | None = None,
+    env: Mapping[str, str] | None = None,
+    resolver: Callable[..., winproc.ResolvedCommand] | None = None,
+) -> dict[str, Any]:
+    """Dry run: the same checks as :func:`run_worker` up to the launch, but nothing is written
+    (no runs dir, no status file, no SQLite attempt) and no process is started. Raises
+    :class:`UsageError` for requests ``run_worker`` would reject up front; anything that would
+    be a classified failure is listed under ``problems``."""
+    validate_request(req)
+    parsed = read_plan(req.state_root.tasks / req.task_id)
+    if parsed.value is None:
+        raise UsageError(f"plan for task {req.task_id} is not usable: {'; '.join(parsed.errors) or 'missing'}")
+    plan = parsed.value
+    subtask = plan.subtask(req.subtask_id)
+    if subtask is None:
+        raise UsageError(f"subtask {req.subtask_id} is not a valid row in the plan of task {req.task_id}")
+    if not plan.revision:
+        raise UsageError(f"plan for task {req.task_id} has no valid revision")
+    if conflict := agent_id_conflict(req.state_root.path, req):
+        raise UsageError(f"agent id rejected: {conflict}")
+    adapter = adapter or ADAPTERS[req.provider]()
+    problems: list[str] = []
+    preview: dict[str, Any] = {
+        "dry_run": True, "provider": req.provider, "mode": req.mode, "task": req.task_id,
+        "subtask": req.subtask_id, "agent": req.agent_id, "worktree": str(req.worktree),
+        "plan_revision": plan.revision, "model": req.model, "timeout": req.timeout,
+        "branch": None, "commit_to_review": None, "profile": None, "verify_command": None,
+        "command": None, "argv": None, "prompt_sha256": None, "env_names": None, "problems": problems,
+    }
+    try:
+        info = gitops.worktree_info(req.worktree)
+        exclude = req.state_root.path if _inside(req.state_root.path, req.worktree) else None
+        before = gitops.snapshot(req.worktree, exclude)
+    except gitops.GitError as exc:
+        problems.append(f"invalid worktree: {exc}")
+        return preview
+    preview["branch"] = info.branch
+    commit = None
+    if req.mode == "implement":
+        if refusal := _implement_refusal(req, info, before):
+            problems.append(refusal)
+    else:
+        try:
+            commit = gitops.git(req.worktree, "rev-parse", "--verify", f"{req.commit or 'HEAD'}^{{commit}}").strip()
+            preview["commit_to_review"] = commit
+        except gitops.GitError as exc:
+            problems.append(f"commit to review not found: {exc}")
+    prompt = build_prompt(plan=plan, subtask=subtask, agent_id=req.agent_id, provider=req.provider,
+                          mode=req.mode, worktree=req.worktree, branch=info.branch,
+                          board_path=req.state_root.tasks / req.task_id / "plan.md", commit=commit)
+    preview["prompt_sha256"] = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    verify = req.verify_command if req.verify_command is not None else verification_command(plan, subtask.id)
+    preview["verify_command"] = verify
+    # the paths below are never created in a dry run; adapters only build argv from them
+    run_dir = req.state_root.path / "runs" / "dry-run"
+    launch = LaunchRequest(req.worktree, req.mode, prompt, run_dir / "prompt.md", run_dir, req.model,
+                           str(uuid.uuid4()), verify)
+    try:
+        invocation = adapter.build_invocation(launch)
+    except ProfileUnconfigured as exc:
+        problems.append(str(exc))
+        return preview
+    if bad := forbidden_in(invocation.args):
+        problems.append(f"refusing forbidden flag(s) {bad}")
+        return preview
+    preview["profile"] = invocation.profile
+    child_env = winproc.build_env(env if env is not None else os.environ, (*adapter.env_names, *req.pass_env))
+    preview["env_names"] = sorted(child_env)
+    try:
+        command = (resolver or winproc.resolve_command)(adapter.command, env=child_env)
+    except winproc.LaunchError as exc:
+        problems.append(str(exc))
+        preview["argv"] = [adapter.command, *invocation.redacted_args(prompt)]
+        return preview
+    preview["command"] = {"path": str(command.path), "kind": command.kind, "prefix": list(command.prefix)}
+    preview["argv"] = [*command.prefix, *invocation.redacted_args(prompt)]
+    try:
+        length = command.command_line_length(invocation.args)
+    except winproc.UnsafeArgument as exc:
+        problems.append(str(exc))
+        return preview
+    if length > winproc.MAX_COMMAND_LINE:
+        problems.append(f"command line is {length} characters; Windows allows {winproc.MAX_COMMAND_LINE}")
+    return preview
 
 
 def _inside(child: Path, parent: Path) -> bool:

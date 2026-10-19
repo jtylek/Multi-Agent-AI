@@ -494,9 +494,50 @@ def test_cli_worker_run_with_fake_on_path(env, monkeypatch, capsys):
     monkeypatch.setenv("PATH", f"{env.fake_dir}{os.pathsep}{git_dir}")
     code = main(["worker", "run", "--provider", "codex", "--task", "demo", "--subtask", "T1", "--agent-id",
                  "codex-w1", "--mode", "review", "--worktree", str(env.worktree), "--project-root",
-                 str(env.primary), "--timeout", "60"])
+                 str(env.primary), "--timeout", "60", "--execute"])
     out = json.loads(capsys.readouterr().out)
     assert code == 0 and out["failure_class"] is None and out["review_file"]
+
+
+def _snapshot_tree(root: Path) -> list[str]:
+    return sorted(str(p.relative_to(root)) for p in root.rglob("*"))
+
+
+def test_cli_worker_run_is_a_dry_run_by_default(env, monkeypatch, capsys):
+    env.install("codex")
+    env.configure(stdout=CODEX_OK, final="verdict: agreed\n")
+    git_dir = str(Path(GIT).parent)
+    monkeypatch.setenv("PATH", f"{env.fake_dir}{os.pathsep}{git_dir}")
+    before = _snapshot_tree(env.root.path)
+    code = main(["worker", "run", "--provider", "codex", "--task", "demo", "--subtask", "T1", "--agent-id",
+                 "codex-w1", "--mode", "review", "--worktree", str(env.worktree), "--project-root",
+                 str(env.primary)])
+    captured = capsys.readouterr()
+    out = json.loads(captured.out)
+    assert code == 0 and out["dry_run"] is True and out["problems"] == []
+    assert out["argv"] and out["prompt_sha256"] and out["profile"] == "codex-review"
+    assert "--execute" in captured.err
+    assert _snapshot_tree(env.root.path) == before  # no runs dir, no status file
+    assert not (env.fake_dir / "fake-record.json").exists()  # the provider was never started
+
+
+def test_cli_dry_run_reports_problems_without_writing(env, monkeypatch, capsys):
+    env.install("codex")
+    git_dir = str(Path(GIT).parent)
+    monkeypatch.setenv("PATH", f"{env.fake_dir}{os.pathsep}{git_dir}")
+    before = _snapshot_tree(env.root.path)
+    code = main(["worker", "run", "--provider", "codex", "--task", "demo", "--subtask", "T1", "--agent-id",
+                 "codex-w1", "--mode", "review", "--worktree", str(env.worktree), "--project-root",
+                 str(env.primary), "--commit", "deadbeefdeadbeef"])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1 and out["problems"]
+    assert _snapshot_tree(env.root.path) == before
+
+
+def test_cli_dry_run_still_rejects_bad_requests_with_exit_2(env, capsys):
+    code = main(["worker", "run", "--provider", "codex", "--task", "demo", "--subtask", "T1", "--agent-id",
+                 "lead", "--mode", "review", "--worktree", str(env.worktree), "--project-root", str(env.primary)])
+    assert code == 2
 
 
 def test_cli_rejects_bad_requests_with_exit_2(env, capsys):

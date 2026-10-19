@@ -41,10 +41,13 @@ listed below is planned, not implemented.
   targets. Transport is never an ack.
 - CLI `worker run --provider codex|copilot --task T --subtask S --agent-id ID --mode
   review|implement --worktree ABS [--model M] [--timeout S] [--commit SHA]
-  [--verify-command C] [--live-branch B]... [--pass-env NAME]...`: one managed headless
-  worker attempt (T12; see "Managed workers" in
+  [--verify-command C] [--live-branch B]... [--pass-env NAME]... [--execute]`: one managed
+  headless worker attempt (T12; see "Managed workers" in
   [protocol/agent-messaging.md](protocol/agent-messaging.md)). Exit 0 on success, 1 on a
-  classified failure, 2 when rejected before an attempt exists.
+  classified failure, 2 when rejected before an attempt exists. **Dry run by default (T17):**
+  without `--execute` it runs the same plan, worktree and command checks, prints the resolved
+  command and any problems as JSON, writes nothing (no runs dir, status file or SQLite attempt)
+  and starts no provider; exit 0 when ready, 1 when problems are listed, 2 when rejected.
 - Windows process runtime (`winproc.py`): executable resolution (`.exe` > `.cmd`/`.bat`, never
   `.ps1`; npm shims run as `node.exe <script>`), argv without a shell, refusal of arguments
   `cmd.exe` would alter, stdout/stderr streamed to files, timeout with process-tree kill via a

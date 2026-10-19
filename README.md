@@ -147,9 +147,10 @@ py -3.12 -m venv .venv
 .venv\Scripts\multi-agent-ai init --project-root <target-project>
 .venv\Scripts\multi-agent-ai inspect --project-root <target-project>
 
-# one read-only review by a managed Codex worker (uses provider quota)
+# one read-only review by a managed Codex worker; without --execute this is a dry run
+# (checks and prints the command, starts nothing); --execute launches it and uses provider quota
 .venv\Scripts\multi-agent-ai worker run --project-root <target-project> --provider codex `
-    --task <task-id> --subtask <id> --agent-id codex-w1 --mode review --worktree <abs worktree>
+    --task <task-id> --subtask <id> --agent-id codex-w1 --mode review --worktree <abs worktree> --execute
 ```
 
 The state root defaults to `.multi-agent-ai/` in the target project's primary checkout; pass

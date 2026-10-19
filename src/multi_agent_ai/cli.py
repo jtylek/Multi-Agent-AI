@@ -164,6 +164,9 @@ def _add_worker_parser(sub: argparse._SubParsersAction) -> None:
                      help="extra live/protected branch implement mode refuses (main and master always are)")
     run.add_argument("--pass-env", action="append", default=[],
                      help="pass this environment variable to the worker in addition to the allowlist (e.g. an API key)")
+    run.add_argument("--execute", action="store_true",
+                     help="really launch the provider (default is a dry run: checks and shows the command, "
+                          "writes nothing, starts nothing, uses no quota)")
     run.add_argument("--project-root", default=".", help="primary checkout (default: current directory)")
     run.add_argument("--state-root", default=None,
                      help="state root, absolute or relative to the project root (default: .multi-agent-ai)")
@@ -172,7 +175,7 @@ def _add_worker_parser(sub: argparse._SubParsersAction) -> None:
 def _worker_main(args: argparse.Namespace) -> int:
     from pathlib import Path
 
-    from .workers.runner import UsageError, WorkerRequest, run_worker
+    from .workers.runner import UsageError, WorkerRequest, preview_worker, run_worker
 
     root = resolve_state_root(args.project_root, args.state_root)
     if not root.path.is_dir():
@@ -185,6 +188,11 @@ def _worker_main(args: argparse.Namespace) -> int:
         live_branches=tuple(args.live_branch), pass_env=tuple(args.pass_env), verify_command=args.verify_command,
     )
     try:
+        if not args.execute:
+            preview = preview_worker(request)
+            print(json.dumps(preview, indent=2, ensure_ascii=False))
+            print("dry run: nothing was written or started; add --execute to launch", file=sys.stderr)
+            return 1 if preview["problems"] else 0
         outcome = run_worker(request)
     except UsageError as exc:
         print(f"worker run rejected: {exc}", file=sys.stderr)

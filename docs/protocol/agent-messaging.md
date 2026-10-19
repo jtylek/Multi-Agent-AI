@@ -288,7 +288,7 @@ invocation and state. That is different from taking over an unrelated interactiv
 
 **What a managed worker is.** One headless provider process (`codex exec`, `copilot -p`)
 started by `multi-agent-ai worker run` for one subtask in one mode (`review` or
-`implement`), under a **new** agent id such as `codex-w1` or `copilot-w1`. It is never
+`implement`; dry run unless `--execute` is given), under a **new** agent id such as `codex-w1` or `copilot-w1`. It is never
 presented as an existing interactive chat: the runner refuses product names (`codex`,
 `copilot`, `claude`, `code`), the coordinator of any plan, any mailbox participant (sender,
 recipient, ack author), a registry entry, an owner/reviewer named in another plan row, and an
