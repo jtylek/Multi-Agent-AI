@@ -57,7 +57,13 @@ listed below is planned, not implemented.
   as data in `workers/copilot.py`); deterministic prompt builder; table-driven failure
   classification; orchestrator-side Git checks and commit; status/review files; `runs/`
   layout; attempts in the SQLite index (`Attempt` record plus an `attempt_details` table for
-  mode, usage and timings). Tested only with fake executables; **no real provider run has been
+  mode, usage and timings). Usage-limit handling (T15, `workers/quota.py`): failure classes
+  `quota_exhausted`, `cap_reached`, `provider_error`; detector tables (Codex structured events;
+  Claude and Copilot patterns are synthetic until real samples exist), reported-only reset
+  parsing, `quota:`/`cap:` blocker in the worker status, suspended stale-worker rule, a `limit`
+  record with the resume command. Not implemented: WIP `checkpoint:` commits, automatic
+  linked resume attempts, a CLI version probe (the detector version check is exercised in unit
+  tests only). Tested only with fake executables; **no real provider run has been
   made yet** (planned after integration, with the user's OK).
 - Tests in `tests/` cover every valid and invalid example in formats.md, plus the D8 rule
   that exit codes and notification transport never create an ack or a completion.

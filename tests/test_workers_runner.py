@@ -353,6 +353,69 @@ def test_not_a_git_worktree_is_environment(env):
     assert env.run(worktree=plain).failure_class == fc.ENVIRONMENT
 
 
+# --- usage limits (T15; synthetic provider output) ----------------------------------------------
+
+
+CODEX_LIMIT = ('{"type":"thread.started","thread_id":"thr-9"}\n'
+               '{"type":"token_count","rate_limits":{"rate_limit_reached_type":"primary",'
+               '"primary":{"used_percent":100,"resets_at":1792000000}}}\n')
+
+
+def test_codex_quota_exhausted_records_blocker_limit_and_resume(env):
+    env.install("codex")
+    env.configure(stdout=CODEX_LIMIT, exit=1, write={"src/partial.py": "x = 1\n"})
+    outcome = env.run(mode="implement", model="gpt-5")
+    assert outcome.failure_class == fc.QUOTA_EXHAUSTED and outcome.commit is None
+    limit = outcome.result["limit"]
+    assert limit["kind"] == "quota_exhausted" and limit["session"] == "thr-9"
+    assert limit["resume_command"] == "codex exec resume thr-9"
+    assert limit["head_at_launch"] == env.base and limit["status_at_launch"] == []
+    assert limit["reset"] and limit["reset_text"].endswith("UTC (reported)")
+    assert limit["counts_toward_success_rate"] is False and limit["raw_message"]
+    assert "--ephemeral" not in env.record()["argv"]  # implement sessions stay resumable
+    status = read_statuses(task_dir(env))["codex-w1"].value
+    assert status.state == "blocked"
+    assert status.blockers.startswith("quota: codex (gpt-5), resets 2026-") and status.blockers.endswith("(reported)")
+    with StateIndex.open(env.root.database_path) as index:
+        details = index.attempt_details(outcome.attempt_id)
+    assert details["failure_class"] == "quota_exhausted" and details["limit"]["session"] == "thr-9"
+    assert no_acks_anywhere(env)
+
+
+def test_unknown_reset_is_reported_as_unknown(env):
+    env.install("codex")
+    env.configure(stdout='{"type":"token_count","rate_limits":{"spend_control_reached":true}}\n', exit=1)
+    outcome = env.run()
+    assert outcome.failure_class == fc.QUOTA_EXHAUSTED and outcome.result["limit"]["reset"] is None
+    status = read_statuses(task_dir(env))["codex-w1"].value
+    assert status.blockers == "quota: codex (provider default), reset unknown"
+
+
+def test_copilot_cap_uses_the_cap_prefix(env):
+    env.install("copilot")
+    env.configure(stderr="Stopped: --max-ai-credits 5 reached", exit=1)
+    outcome = env.run(env.direct_resolver(), provider="copilot", agent_id="copilot-w1")
+    assert outcome.failure_class == fc.CAP_REACHED
+    assert outcome.result["limit"]["resume_command"].startswith("copilot --resume ")
+    status = read_statuses(task_dir(env))["copilot-w1"].value
+    assert status.blockers.startswith("cap: copilot (provider default), reset unknown")
+
+
+def test_bare_429_is_a_provider_error_and_a_plain_failure_stays_nonzero_exit(env):
+    env.install("codex")
+    env.configure(stdout=CODEX_OK, stderr="HTTP 429 Too Many Requests", exit=1)
+    throttled = env.run()
+    assert throttled.failure_class == fc.PROVIDER_ERROR and throttled.result["limit"]["counts_toward_success_rate"]
+    env.configure(stdout=CODEX_OK, stderr="something broke", exit=3)
+    assert env.run().failure_class == fc.NONZERO_EXIT
+
+
+def test_a_limit_message_on_a_successful_exit_is_not_reclassified(env):
+    env.install("codex")
+    env.configure(stdout=CODEX_LIMIT, final=FINAL, exit=0)
+    assert env.run().failure_class is None
+
+
 # --- process failures ---------------------------------------------------------------------------
 
 

@@ -321,7 +321,7 @@ generated argv against a denylist):
 
 ```text
 codex exec -C <wt> -s read-only       --ephemeral --color never --json -o <run>/final-message.md [-m M] -
-codex exec -C <wt> -s workspace-write --ephemeral --color never --json -o <run>/final-message.md [-m M] -
+codex exec -C <wt> -s workspace-write             --color never --json -o <run>/final-message.md [-m M] -
 
 copilot -C <wt> -p <PROMPT> --output-format json --silent --session-id <uuid>
         --usage-output-file <run>/usage.json --disallow-temp-dir [--model M]
@@ -331,8 +331,9 @@ copilot -C <wt> -p <PROMPT> --output-format json --silent --session-id <uuid>
   implement: --available-tools=bash,create,edit,view,grep,glob and ",write" appended to --allow-tool
 ```
 
-`--ephemeral` keeps a managed Codex run out of Codex's persisted sessions, so it can never be
-listed or resumed as if it were an interactive chat. Copilot gets no `--add-dir`, so its
+`--ephemeral` (review runs only) keeps a managed Codex review out of Codex's persisted sessions.
+Implement runs keep their session so a usage limit can be resumed with `codex exec resume <id>`
+(never run automatically). Copilot gets no `--add-dir`, so its
 file tools are limited to the worktree; `<verify>` is the verification command from the plan
 (or `--verify-command`), and without one the Copilot profile is unconfigured and the worker
 is not started. The exact form of `<verify>` that Copilot matches (absolute
@@ -366,6 +367,27 @@ launch, or a nonzero exit whose output says so), `review_modified_files`,
 widened), `nonzero_exit`, `malformed_output`, `no_changes` (implement run without a change),
 `commit_failed` (the orchestrator's commit, including hooks, failed). A denied permission goes
 back to the user; it is never routed to another agent to get around it.
+
+**Usage limits (T15).** Three further classes, from positive identification only (a nonzero
+exit, a bare 429 or a missing usage file alone is never quota evidence):
+`quota_exhausted` (the provider's usage limit; Codex: `rate_limits.rate_limit_reached_type` or
+`spend_control_reached` in the JSON events), `cap_reached` (a locally configured cap such as
+Copilot `--max-ai-credits`) and `provider_error` (throttling or a generic API error, e.g. a bare
+429). Detector tables live in `workers/quota.py`; the Claude and Copilot patterns and the Codex
+event shape are synthetic until a real sample is recorded, and a CLI version a table does not
+list falls back to `provider_error` with the raw output. The reset time is only what the provider
+reports (epoch field, or a wall-clock time plus zone resolved with `zoneinfo`; a time earlier
+than now means next day; any failure, including a missing tz database, means `reset unknown`).
+The worker's own status file becomes `state: blocked` with `blockers: quota: <provider>
+(<model>), resets <time> <zone> (reported)` or `... reset unknown` (`cap:` for a cap), which
+suspends the stale-worker rule until the reset, or 24 hours when unknown. `result.json` and the
+SQLite `attempt_details` carry a `limit` record: provider, model, session, the exact resume
+command (recorded, never run), HEAD and `git status --porcelain` at launch, `git diff --stat` at
+failure, the raw message, observation time and reset; such attempts do not count toward success
+rates. There is no polling and no automatic retry: at the reset the coordinator tells the user,
+and a resume is a new, linked attempt after the worktree is checked. Nothing is rerouted to
+another account; reassignment to another provider is a coordinator plan revision, with the
+user told. Implement-mode Codex runs omit `--ephemeral` so their session can be resumed.
 
 **Process handling (Windows).** Provider commands resolve to `.exe`, then `.cmd`/`.bat`, never
 `.ps1`; npm shims run as `node.exe <script>` so the prompt never passes through `cmd.exe`. The

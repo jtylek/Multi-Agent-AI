@@ -31,7 +31,7 @@ from ..mailbox import ACK_PREFIX, ACK_SUFFIX, REQUEST_FILE
 from ..models import Attempt, Plan, Status, Subtask
 from ..state import StateIndex, StateRoot
 from . import failures as fc
-from . import gitops
+from . import gitops, quota
 from .base import MODES, Invocation, LaunchRequest, ProfileUnconfigured, ProviderAdapter, forbidden_in
 from .codex import CodexAdapter
 from .copilot import CopilotAdapter
@@ -227,6 +227,7 @@ class _Run:
         self.subtask: Subtask | None = None
         self.branch: str | None = None
         self.status_path: Path | None = None
+        self.limit: quota.LimitFinding | None = None
 
     def status(self, state: str, blockers: str, last_commit: str = "none") -> None:
         if self.plan is None or self.subtask is None:
@@ -393,6 +394,12 @@ def run_worker(
     run.result["usage"] = parsed_output.usage
     if parsed_output.session:
         run.result["provider_session"] = parsed_output.session
+    if result.exit_code != 0 and not result.timed_out:
+        finding = quota.detect(req.provider, stdout, stderr)  # positive identification only
+        if finding is not None:
+            run.limit = finding
+            evidence["limit"] = finding.kind
+            run.result["limit"] = _limit_record(run, finding, before, session_id, parsed_output.session)
     if parsed_output.malformed:
         evidence["malformed"] = True
         run.result["findings"].append(f"output: {parsed_output.malformed}")
@@ -521,6 +528,29 @@ def preview_worker(
     return preview
 
 
+_RESUME = {"codex": "codex exec resume {id}", "copilot": "copilot --resume {id}"}
+
+
+def _limit_record(run: _Run, finding: quota.LimitFinding, before: gitops.Snapshot, session_id: str,
+                  provider_session: Mapping[str, str]) -> dict[str, Any]:
+    """The per-attempt limit record (plan T15 item 5). The resume command is recorded for a human or
+    the coordinator; the orchestrator never runs it (a resume is a new, linked attempt)."""
+    req = run.req
+    session = provider_session.get("thread_id") or (session_id if req.provider == "copilot" else None)
+    try:
+        diff_stat = gitops.git(req.worktree, "diff", "--stat", "HEAD").strip()
+    except gitops.GitError as exc:
+        diff_stat = f"unavailable: {exc}"
+    return {
+        "kind": finding.kind, "provider": req.provider, "model": req.model, "session": session,
+        "resume_command": _RESUME[req.provider].format(id=session) if session else None,
+        "head_at_launch": before.head, "status_at_launch": list(before.status), "diff_stat_at_failure": diff_stat,
+        "raw_message": finding.raw_message, "observed": _iso(datetime.now()), "reason": finding.reason,
+        "reset": finding.reset.isoformat() if finding.reset else None, "reset_zone": finding.reset_zone,
+        "reset_text": finding.reset_text, "counts_toward_success_rate": finding.kind == quota.PROVIDER_ERROR,
+    }
+
+
 def _inside(child: Path, parent: Path) -> bool:
     try:
         child.resolve().relative_to(parent.resolve())
@@ -552,6 +582,8 @@ def _finish(run: _Run, evidence: dict[str, Any], detail: str | None, message: st
     if failure in (fc.NONZERO_EXIT, fc.UNSUPPORTED_MODEL, fc.AUTH, fc.PERMISSION_DENIED, fc.INVALID_ARGUMENTS,
                    fc.TIMEOUT) and detail is None:
         detail = _one_line(evidence.get("stderr") or "", 500) or f"exit code {evidence.get('exit_code')}"
+    if failure in (fc.QUOTA_EXHAUSTED, fc.CAP_REACHED, fc.PROVIDER_ERROR) and detail is None and run.limit is not None:
+        detail = run.limit.raw_message
     if failure == fc.NO_CHANGES:
         detail = "implement run exited 0 but changed no file"
     if failure == fc.MALFORMED_OUTPUT and detail is None:
@@ -582,6 +614,7 @@ def _finish(run: _Run, evidence: dict[str, Any], detail: str | None, message: st
             "profile": run.result["profile"], "usage": run.result["usage"],
             "duration_seconds": run.result["duration_seconds"], "timed_out": run.result["timed_out"],
             "commit_created": commit, "run_dir": str(run.run_dir),
+            "failure_class": failure, "model": req.model, "limit": run.result.get("limit"),
         })
 
     review_path = None
@@ -597,6 +630,8 @@ def _finish(run: _Run, evidence: dict[str, Any], detail: str | None, message: st
         ], message, req.agent_id)
     state = "review" if failure is None else "blocked"
     blockers = "none" if failure is None else f"{failure}: {detail or ''}"
+    if failure in (fc.QUOTA_EXHAUSTED, fc.CAP_REACHED) and run.limit is not None:
+        blockers = quota.blocker_text(run.limit, req.model)  # formats.md: "quota: ..." / "cap: ..."
     run.status(state, blockers, last_commit=commit or "none")
     return WorkerOutcome(run.attempt_id, failure, run.result["exit_code"], run.run_dir, run.result,
                          run.status_path, review_path, commit)
