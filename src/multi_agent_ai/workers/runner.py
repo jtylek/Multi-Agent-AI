@@ -31,7 +31,7 @@ from ..mailbox import ACK_PREFIX, ACK_SUFFIX, REQUEST_FILE
 from ..models import Attempt, Plan, Status, Subtask
 from ..state import StateIndex, StateRoot
 from . import failures as fc
-from . import gitops
+from . import gitops, quota
 from .base import MODES, Invocation, LaunchRequest, ProfileUnconfigured, ProviderAdapter, forbidden_in
 from .codex import CodexAdapter
 from .copilot import CopilotAdapter
@@ -227,6 +227,7 @@ class _Run:
         self.subtask: Subtask | None = None
         self.branch: str | None = None
         self.status_path: Path | None = None
+        self.limit: quota.LimitFinding | None = None
 
     def status(self, state: str, blockers: str, last_commit: str = "none") -> None:
         if self.plan is None or self.subtask is None:
@@ -250,9 +251,13 @@ def run_worker(
     adapter: ProviderAdapter | None = None,
     env: Mapping[str, str] | None = None,
     resolver: Callable[..., winproc.ResolvedCommand] | None = None,
+    cli_version: str | None = None,
 ) -> WorkerOutcome:
     """Run one attempt. Raises :class:`UsageError` before anything is written; afterwards
-    every outcome is recorded (runs dir, result.json, SQLite attempt, status file)."""
+    every outcome is recorded (runs dir, result.json, SQLite attempt, status file).
+
+    ``cli_version`` is the provider CLI version when positively known (no probe is ever run, as it
+    could use quota); without it a limit signature is reported as ``provider_error``."""
     validate_request(req)
     task_dir = req.state_root.tasks / req.task_id
     parsed = read_plan(task_dir)
@@ -296,19 +301,7 @@ def run_worker(
         return finish(str(exc))
     run.result["git"] = {"branch": info.branch, "head_before": info.head}
     if req.mode == "implement":
-        live = {*DEFAULT_LIVE_BRANCHES, *req.live_branches}
-        expected = f"task/{req.task_id}/{req.subtask_id}"
-        refusal = None
-        if gitops.same_path(req.worktree, req.project_root) or not info.is_linked_worktree:
-            refusal = "implement mode refuses the primary checkout; use a linked worktree"
-        elif info.branch is None:
-            refusal = "implement mode needs a branch; the worktree has a detached HEAD"
-        elif info.branch in live:
-            refusal = f"implement mode refuses live/protected branch {info.branch!r}"
-        elif info.branch != expected:
-            refusal = f"implement mode expects branch {expected!r}, worktree is on {info.branch!r}"
-        elif before.status:
-            refusal = f"worktree is dirty before the run ({len(before.status)} entries); clean it first"
+        refusal = _implement_refusal(req, info, before)
         if refusal:
             evidence["environment_error"] = True
             return finish(refusal)
@@ -405,6 +398,12 @@ def run_worker(
     run.result["usage"] = parsed_output.usage
     if parsed_output.session:
         run.result["provider_session"] = parsed_output.session
+    if result.exit_code != 0 and not result.timed_out:
+        finding = quota.detect(req.provider, stdout, stderr, cli_version=cli_version)  # positive identification only
+        if finding is not None:
+            run.limit = finding
+            evidence["limit"] = finding.kind
+            run.result["limit"] = _limit_record(run, finding, before, session_id, parsed_output.session)
     if parsed_output.malformed:
         evidence["malformed"] = True
         run.result["findings"].append(f"output: {parsed_output.malformed}")
@@ -425,6 +424,135 @@ def run_worker(
             evidence["commit_failed"] = True
             detail = str(exc)
     return finish(detail)
+
+
+def _implement_refusal(req: WorkerRequest, info: gitops.WorktreeInfo, before: Any) -> str | None:
+    """Why implement mode must not start in this worktree (None when it may)."""
+    live = {*DEFAULT_LIVE_BRANCHES, *req.live_branches}
+    expected = f"task/{req.task_id}/{req.subtask_id}"
+    if gitops.same_path(req.worktree, req.project_root) or not info.is_linked_worktree:
+        return "implement mode refuses the primary checkout; use a linked worktree"
+    if info.branch is None:
+        return "implement mode needs a branch; the worktree has a detached HEAD"
+    if info.branch in live:
+        return f"implement mode refuses live/protected branch {info.branch!r}"
+    if info.branch != expected:
+        return f"implement mode expects branch {expected!r}, worktree is on {info.branch!r}"
+    if before.status:
+        return f"worktree is dirty before the run ({len(before.status)} entries); clean it first"
+    return None
+
+
+def preview_worker(
+    req: WorkerRequest,
+    *,
+    adapter: ProviderAdapter | None = None,
+    env: Mapping[str, str] | None = None,
+    resolver: Callable[..., winproc.ResolvedCommand] | None = None,
+) -> dict[str, Any]:
+    """Dry run: the same checks as :func:`run_worker` up to the launch, but nothing is written
+    (no runs dir, no status file, no SQLite attempt) and no process is started. Raises
+    :class:`UsageError` for requests ``run_worker`` would reject up front; anything that would
+    be a classified failure is listed under ``problems``."""
+    validate_request(req)
+    parsed = read_plan(req.state_root.tasks / req.task_id)
+    if parsed.value is None:
+        raise UsageError(f"plan for task {req.task_id} is not usable: {'; '.join(parsed.errors) or 'missing'}")
+    plan = parsed.value
+    subtask = plan.subtask(req.subtask_id)
+    if subtask is None:
+        raise UsageError(f"subtask {req.subtask_id} is not a valid row in the plan of task {req.task_id}")
+    if not plan.revision:
+        raise UsageError(f"plan for task {req.task_id} has no valid revision")
+    if conflict := agent_id_conflict(req.state_root.path, req):
+        raise UsageError(f"agent id rejected: {conflict}")
+    adapter = adapter or ADAPTERS[req.provider]()
+    problems: list[str] = []
+    preview: dict[str, Any] = {
+        "dry_run": True, "provider": req.provider, "mode": req.mode, "task": req.task_id,
+        "subtask": req.subtask_id, "agent": req.agent_id, "worktree": str(req.worktree),
+        "plan_revision": plan.revision, "model": req.model, "timeout": req.timeout,
+        "branch": None, "commit_to_review": None, "profile": None, "verify_command": None,
+        "command": None, "argv": None, "prompt_sha256": None, "env_names": None, "problems": problems,
+    }
+    try:
+        info = gitops.worktree_info(req.worktree)
+        exclude = req.state_root.path if _inside(req.state_root.path, req.worktree) else None
+        before = gitops.snapshot(req.worktree, exclude)
+    except gitops.GitError as exc:
+        problems.append(f"invalid worktree: {exc}")
+        return preview
+    preview["branch"] = info.branch
+    commit = None
+    if req.mode == "implement":
+        if refusal := _implement_refusal(req, info, before):
+            problems.append(refusal)
+    else:
+        try:
+            commit = gitops.git(req.worktree, "rev-parse", "--verify", f"{req.commit or 'HEAD'}^{{commit}}").strip()
+            preview["commit_to_review"] = commit
+        except gitops.GitError as exc:
+            problems.append(f"commit to review not found: {exc}")
+    prompt = build_prompt(plan=plan, subtask=subtask, agent_id=req.agent_id, provider=req.provider,
+                          mode=req.mode, worktree=req.worktree, branch=info.branch,
+                          board_path=req.state_root.tasks / req.task_id / "plan.md", commit=commit)
+    preview["prompt_sha256"] = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    verify = req.verify_command if req.verify_command is not None else verification_command(plan, subtask.id)
+    preview["verify_command"] = verify
+    # the paths below are never created in a dry run; adapters only build argv from them
+    run_dir = req.state_root.path / "runs" / "dry-run"
+    launch = LaunchRequest(req.worktree, req.mode, prompt, run_dir / "prompt.md", run_dir, req.model,
+                           str(uuid.uuid4()), verify)
+    try:
+        invocation = adapter.build_invocation(launch)
+    except ProfileUnconfigured as exc:
+        problems.append(str(exc))
+        return preview
+    if bad := forbidden_in(invocation.args):
+        problems.append(f"refusing forbidden flag(s) {bad}")
+        return preview
+    preview["profile"] = invocation.profile
+    child_env = winproc.build_env(env if env is not None else os.environ, (*adapter.env_names, *req.pass_env))
+    preview["env_names"] = sorted(child_env)
+    try:
+        command = (resolver or winproc.resolve_command)(adapter.command, env=child_env)
+    except winproc.LaunchError as exc:
+        problems.append(str(exc))
+        preview["argv"] = [adapter.command, *invocation.redacted_args(prompt)]
+        return preview
+    preview["command"] = {"path": str(command.path), "kind": command.kind, "prefix": list(command.prefix)}
+    preview["argv"] = [*command.prefix, *invocation.redacted_args(prompt)]
+    try:
+        length = command.command_line_length(invocation.args)
+    except winproc.UnsafeArgument as exc:
+        problems.append(str(exc))
+        return preview
+    if length > winproc.MAX_COMMAND_LINE:
+        problems.append(f"command line is {length} characters; Windows allows {winproc.MAX_COMMAND_LINE}")
+    return preview
+
+
+_RESUME = {"codex": "codex exec resume {id}", "copilot": "copilot --resume {id}"}
+
+
+def _limit_record(run: _Run, finding: quota.LimitFinding, before: gitops.Snapshot, session_id: str,
+                  provider_session: Mapping[str, str]) -> dict[str, Any]:
+    """The per-attempt limit record (plan T15 item 5). The resume command is recorded for a human or
+    the coordinator; the orchestrator never runs it (a resume is a new, linked attempt)."""
+    req = run.req
+    session = provider_session.get("thread_id") or (session_id if req.provider == "copilot" else None)
+    try:
+        diff_stat = gitops.git(req.worktree, "diff", "--stat", "HEAD").strip()
+    except gitops.GitError as exc:
+        diff_stat = f"unavailable: {exc}"
+    return {
+        "kind": finding.kind, "provider": req.provider, "model": req.model, "session": session,
+        "resume_command": _RESUME[req.provider].format(id=session) if session else None,
+        "head_at_launch": before.head, "status_at_launch": list(before.status), "diff_stat_at_failure": diff_stat,
+        "raw_message": finding.raw_message, "observed": _iso(datetime.now()), "reason": finding.reason,
+        "reset": finding.reset.isoformat() if finding.reset else None, "reset_zone": finding.reset_zone,
+        "reset_text": finding.reset_text, "counts_toward_success_rate": finding.kind == quota.PROVIDER_ERROR,
+    }
 
 
 def _inside(child: Path, parent: Path) -> bool:
@@ -458,6 +586,8 @@ def _finish(run: _Run, evidence: dict[str, Any], detail: str | None, message: st
     if failure in (fc.NONZERO_EXIT, fc.UNSUPPORTED_MODEL, fc.AUTH, fc.PERMISSION_DENIED, fc.INVALID_ARGUMENTS,
                    fc.TIMEOUT) and detail is None:
         detail = _one_line(evidence.get("stderr") or "", 500) or f"exit code {evidence.get('exit_code')}"
+    if failure in (fc.QUOTA_EXHAUSTED, fc.CAP_REACHED, fc.PROVIDER_ERROR) and detail is None and run.limit is not None:
+        detail = run.limit.raw_message
     if failure == fc.NO_CHANGES:
         detail = "implement run exited 0 but changed no file"
     if failure == fc.MALFORMED_OUTPUT and detail is None:
@@ -488,6 +618,7 @@ def _finish(run: _Run, evidence: dict[str, Any], detail: str | None, message: st
             "profile": run.result["profile"], "usage": run.result["usage"],
             "duration_seconds": run.result["duration_seconds"], "timed_out": run.result["timed_out"],
             "commit_created": commit, "run_dir": str(run.run_dir),
+            "failure_class": failure, "model": req.model, "limit": run.result.get("limit"),
         })
 
     review_path = None
@@ -503,6 +634,8 @@ def _finish(run: _Run, evidence: dict[str, Any], detail: str | None, message: st
         ], message, req.agent_id)
     state = "review" if failure is None else "blocked"
     blockers = "none" if failure is None else f"{failure}: {detail or ''}"
+    if failure in (fc.QUOTA_EXHAUSTED, fc.CAP_REACHED) and run.limit is not None:
+        blockers = quota.blocker_text(run.limit, req.model)  # formats.md: "quota: ..." / "cap: ..."
     run.status(state, blockers, last_commit=commit or "none")
     return WorkerOutcome(run.attempt_id, failure, run.result["exit_code"], run.run_dir, run.result,
                          run.status_path, review_path, commit)

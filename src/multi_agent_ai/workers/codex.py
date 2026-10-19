@@ -4,7 +4,8 @@ Profiles:
 
 * ``codex-review``:    ``codex exec -C <wt> -s read-only --ephemeral --color never --json
   -o <final-message> [-m M] -``
-* ``codex-implement``: the same with ``-s workspace-write``.
+* ``codex-implement``: the same with ``-s workspace-write`` and without ``--ephemeral``, so a
+  usage limit leaves a session that ``codex exec resume <id>`` can continue (T15).
 
 The prompt is read from stdin (``-`` as the PROMPT argument; documented in ``codex exec
 --help``), so it never passes through Windows argv quoting. ``--ephemeral`` keeps the run out
@@ -32,8 +33,9 @@ class CodexAdapter(ProviderAdapter):
 
     def build_invocation(self, request: LaunchRequest) -> Invocation:
         final = request.run_dir / FINAL_MESSAGE_FILE
-        args = ["exec", "-C", str(request.worktree), "-s", SANDBOX[request.mode], "--ephemeral",
-                "--color", "never", "--json", "-o", str(final)]
+        # implement runs keep their session (no --ephemeral) so a usage limit can be resumed (T15)
+        args = ["exec", "-C", str(request.worktree), "-s", SANDBOX[request.mode],
+                *(["--ephemeral"] if request.mode == "review" else []), "--color", "never", "--json", "-o", str(final)]
         if request.model:
             args += ["-m", request.model]
         args.append("-")

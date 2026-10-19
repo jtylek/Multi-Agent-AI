@@ -41,10 +41,13 @@ listed below is planned, not implemented.
   targets. Transport is never an ack.
 - CLI `worker run --provider codex|copilot --task T --subtask S --agent-id ID --mode
   review|implement --worktree ABS [--model M] [--timeout S] [--commit SHA]
-  [--verify-command C] [--live-branch B]... [--pass-env NAME]...`: one managed headless
-  worker attempt (T12; see "Managed workers" in
+  [--verify-command C] [--live-branch B]... [--pass-env NAME]... [--execute]`: one managed
+  headless worker attempt (T12; see "Managed workers" in
   [protocol/agent-messaging.md](protocol/agent-messaging.md)). Exit 0 on success, 1 on a
-  classified failure, 2 when rejected before an attempt exists.
+  classified failure, 2 when rejected before an attempt exists. **Dry run by default (T17):**
+  without `--execute` it runs the same plan, worktree and command checks, prints the resolved
+  command and any problems as JSON, writes nothing (no runs dir, status file or SQLite attempt)
+  and starts no provider; exit 0 when ready, 1 when problems are listed, 2 when rejected.
 - Windows process runtime (`winproc.py`): executable resolution (`.exe` > `.cmd`/`.bat`, never
   `.ps1`; npm shims run as `node.exe <script>`), argv without a shell, refusal of arguments
   `cmd.exe` would alter, stdout/stderr streamed to files, timeout with process-tree kill via a
@@ -54,7 +57,16 @@ listed below is planned, not implemented.
   as data in `workers/copilot.py`); deterministic prompt builder; table-driven failure
   classification; orchestrator-side Git checks and commit; status/review files; `runs/`
   layout; attempts in the SQLite index (`Attempt` record plus an `attempt_details` table for
-  mode, usage and timings). Tested only with fake executables; **no real provider run has been
+  mode, usage and timings). Usage-limit handling (T15, `workers/quota.py`): failure classes
+  `quota_exhausted`, `cap_reached`, `provider_error`; detector tables (Codex structured events;
+  Claude and Copilot patterns are synthetic until real samples exist; **quota detection becomes
+  active only once a provider's CLI version is positively known and listed in the detector
+  table. No table lists a version yet and the runner never probes the version (a probe could use
+  quota), so today every limit signature is reported as `provider_error` with the raw output**), reported-only reset
+  parsing, `quota:`/`cap:` blocker in the worker status, suspended stale-worker rule, a `limit`
+  record with the resume command. Not implemented: WIP `checkpoint:` commits, automatic
+  linked resume attempts, a CLI version probe (the detector version check is exercised in unit
+  tests only). Tested only with fake executables; **no real provider run has been
   made yet** (planned after integration, with the user's OK).
 - Tests in `tests/` cover every valid and invalid example in formats.md, plus the D8 rule
   that exit codes and notification transport never create an ack or a completion.
