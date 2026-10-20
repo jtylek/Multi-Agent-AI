@@ -149,38 +149,57 @@ def _count(value: Any) -> int | float | None:
 
 def usage_totals(document: Any) -> dict[str, Any] | None:
     """Full run totals from the usage file written by ``--usage-output-file`` (field names from a
-    real run, Copilot CLI 1.0.98): ``tokenDetails`` (input, cache_read, cache_write, output),
-    reasoning tokens and request count from ``modelMetrics``, ``totalPremiumRequestCost`` and the
+    real run, Copilot CLI 1.0.98): ``input_tokens`` is the FULL input (``modelMetrics`` summed over
+    models; else fresh + cache_read + cache_write), ``fresh_input_tokens`` the uncached part, plus
+    cache_read, cache_write and output from ``tokenDetails``, reasoning tokens and request count from
+    ``modelMetrics``, ``totalPremiumRequestCost`` and the
     model. Everything is provider-reported, hence ``source: measured``; absent fields are left out,
     never invented. Returns None when nothing usable is present."""
     if not isinstance(document, dict):
         return None
     totals: dict[str, Any] = {}
     details = document.get("tokenDetails")
+    components: dict[str, int | float] = {}
     if isinstance(details, dict):
         for key in ("input", "cache_read", "cache_write", "output"):
             entry = details.get(key)
             count = _count(entry.get("tokenCount")) if isinstance(entry, dict) else None
             if count is not None:
-                totals[f"{key}_tokens"] = count
+                components[key] = count
+    # tokenDetails.input is only the FRESH (uncached) input. The full input is fresh + cache_read +
+    # cache_write, which modelMetrics.<model>.usage.inputTokens reports directly (see below).
+    for key in ("cache_read", "cache_write", "output"):
+        if key in components:
+            totals[f"{key}_tokens"] = components[key]
+    if "input" in components:
+        totals["fresh_input_tokens"] = components["input"]
     models = document.get("modelMetrics")
     if isinstance(models, dict) and models:
-        reasoning = requests = 0
-        found_reasoning = found_requests = False
+        reasoning = requests = full_input = 0
+        found_reasoning = found_requests = found_input = False
         for metrics in models.values():
             if not isinstance(metrics, dict):
                 continue
+            full = _count(metrics["usage"].get("inputTokens")) if isinstance(metrics.get("usage"), dict) else None
+            if full is not None:
+                full_input, found_input = full_input + full, True
             used = _count((metrics.get("usage") or {}).get("reasoningTokens")) if isinstance(metrics.get("usage"), dict) else None
             if used is not None:
                 reasoning, found_reasoning = reasoning + used, True
             count = _count((metrics.get("requests") or {}).get("count")) if isinstance(metrics.get("requests"), dict) else None
             if count is not None:
                 requests, found_requests = requests + count, True
+        if found_input:
+            totals["input_tokens"] = full_input
         if found_reasoning:
             totals["reasoning_tokens"] = reasoning
         if found_requests:
             totals["request_count"] = requests
         totals["models"] = sorted(str(name) for name in models)
+    if "input_tokens" not in totals and "fresh_input_tokens" in totals:
+        # no per-model figure: the full input is fresh + cache_read + cache_write
+        totals["input_tokens"] = (totals["fresh_input_tokens"] + totals.get("cache_read_tokens", 0)
+                                  + totals.get("cache_write_tokens", 0))
     for source, target in (("totalPremiumRequestCost", "premium_request_cost"), ("totalUserRequests", "user_requests"),
                            ("totalApiDurationMs", "api_duration_ms"), ("totalNanoAiu", "nano_aiu")):
         value = _count(document.get(source))

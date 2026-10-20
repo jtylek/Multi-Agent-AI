@@ -72,7 +72,7 @@ def test_adapter_uses_the_supplied_profiles():
 def test_usage_totals_from_a_real_usage_file():
     totals = cp.usage_totals(REAL_USAGE)
     assert totals == {
-        "input_tokens": 10, "cache_read_tokens": 27097, "cache_write_tokens": 5100, "output_tokens": 696,
+        "input_tokens": 32207, "fresh_input_tokens": 10, "cache_read_tokens": 27097, "cache_write_tokens": 5100, "output_tokens": 696,
         "reasoning_tokens": 64, "request_count": 4, "models": ["claude-sonnet-5.5"], "premium_request_cost": 1,
         "user_requests": 1, "api_duration_ms": 6901, "nano_aiu": 2243970000, "model": "claude-sonnet-5.5",
         "last_call_input_tokens": 8481, "last_call_output_tokens": 262, "source": "measured",
@@ -84,11 +84,38 @@ def test_usage_totals_never_invents_values(document):
     assert cp.usage_totals(document) is None
 
 
+FIXTURE = Path(__file__).parent / "fixtures" / "copilot-usage-1.0.98.json"
+
+
+def test_real_p1_usage_file_gives_the_full_input_not_the_fresh_component():
+    """Regression: tokenDetails.input (10) is only the fresh input; the full input is 32207."""
+    totals = cp.usage_totals(json.loads(FIXTURE.read_text(encoding="utf-8")))
+    assert totals["input_tokens"] == 32207
+    assert totals["input_tokens"] == (totals["fresh_input_tokens"] + totals["cache_read_tokens"]
+                                      + totals["cache_write_tokens"])
+    assert totals["fresh_input_tokens"] == 10 and totals["cache_read_tokens"] == 27097
+    assert totals["cache_write_tokens"] == 5100
+    assert totals["output_tokens"] == 696 and totals["reasoning_tokens"] == 64 and totals["request_count"] == 4
+    assert totals["premium_request_cost"] == 1 and totals["model"] == "claude-sonnet-5.5"
+    assert totals["last_call_input_tokens"] == 8481 and totals["last_call_output_tokens"] == 262
+    assert totals["source"] == "measured"
+
+
+def test_input_is_summed_over_models_and_falls_back_to_the_components():
+    two = {"modelMetrics": {"a": {"usage": {"inputTokens": 100}}, "b": {"usage": {"inputTokens": 50}}},
+           "tokenDetails": {"input": {"tokenCount": 5}}}
+    assert cp.usage_totals(two)["input_tokens"] == 150 and cp.usage_totals(two)["fresh_input_tokens"] == 5
+    no_models = {"tokenDetails": {"input": {"tokenCount": 10}, "cache_read": {"tokenCount": 20},
+                                  "cache_write": {"tokenCount": 3}, "output": {"tokenCount": 4}}}
+    totals = cp.usage_totals(no_models)
+    assert totals["input_tokens"] == 33 and totals["fresh_input_tokens"] == 10
+
+
 def test_usage_totals_tolerates_partial_and_odd_fields():
     totals = cp.usage_totals({"tokenDetails": {"input": {"tokenCount": 5}, "output": {"tokenCount": True},
                                                 "cache_read": 7}, "modelMetrics": {"m": "bad"},
                               "totalPremiumRequestCost": "1"})
-    assert totals == {"input_tokens": 5, "models": ["m"], "source": "measured"}
+    assert totals == {"fresh_input_tokens": 5, "input_tokens": 5, "models": ["m"], "source": "measured"}
 
 
 def test_copilot_run_records_totals_and_keeps_last_call_values(env):
