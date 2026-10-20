@@ -203,6 +203,19 @@ def _review_file(task_dir: Path, subtask_id: str, agent_id: str) -> Path:
     return task_dir / f"review-{subtask_id}-{agent_id}.md"
 
 
+REVIEW_VERDICT = re.compile(r"^\s*verdict:\s*(.*?)\s*$", re.I | re.M)
+
+
+def review_verdict(message: str) -> str:
+    """The reviewer's verdict from its final message: ``agreed``, ``changes requested`` or ``unparsed``.
+    Strict: the message must contain a line that is exactly ``verdict: agreed`` or ``verdict: changes
+    requested`` (case-insensitive, trimmed). No such line, a line with any other value, or two lines that
+    disagree give ``unparsed``, which never lets a commit through the integration gate. Nothing is
+    inferred from prose or the exit code. The verdict is the reviewer's claim, not independently verified."""
+    values = {m.group(1).lower() for m in REVIEW_VERDICT.finditer(message)}
+    return values.pop() if len(values) == 1 and values <= {"agreed", "changes requested"} else "unparsed"
+
+
 def write_review(path: Path, headers: list[tuple[str, str]], message: str, agent_id: str) -> None:
     """Orchestrator provenance header, blank line, then the worker's final message verbatim."""
     if path.exists():
@@ -670,12 +683,13 @@ def _finish(run: _Run, evidence: dict[str, Any], detail: str | None, message: st
     if failure is None and req.mode == "review" and message is not None and run.plan is not None:
         review_path = _review_file(run.task_dir, req.subtask_id, req.agent_id)
         write_review(review_path, [
+            ("status", review_verdict(message)),
             ("subtask", req.subtask_id), ("agent", req.agent_id), ("provider", req.provider),
             ("model", req.model or "provider default (not specified)"),
             ("commit", run.result["git"].get("commit_reviewed", "unknown")), ("attempt", run.attempt_id),
             ("profile", run.result["profile"] or "-"), ("exit-code", str(run.result["exit_code"])),
             ("plan-revision", str(run.plan.revision)), ("updated", format_timestamp()),
-            ("provenance", "header written by the orchestrator; the body is the worker's final message, verbatim"),
+            ("provenance", "headers written by the orchestrator (status is parsed from the verdict line of the body); the body is the worker's final message, verbatim"),
         ], message, req.agent_id)
     state = "review" if failure is None else "blocked"
     blockers = "none" if failure is None else f"{failure}: {detail or ''}"

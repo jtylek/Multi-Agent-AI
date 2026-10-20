@@ -218,6 +218,7 @@ def test_codex_review_success_end_to_end(env):
     assert doc.headers["commit"] == env.base and doc.headers["attempt"] == outcome.attempt_id
     assert doc.headers["profile"] == "codex-review" and doc.headers["exit-code"] == "0"
     assert doc.headers["plan-revision"] == "3"
+    assert doc.headers["status"] == "agreed"  # parsed by the orchestrator from the verdict line (Q12)
 
     status = read_statuses(task_dir(env))["codex-w1"]
     assert status.ok, status.errors

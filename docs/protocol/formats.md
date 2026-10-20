@@ -308,3 +308,17 @@ interpret the line as a shell script. For backwards compatibility, a plan with o
 no matching `verify:` entry uses the last inline-code span in that subtask's verification text.
 When multiple subtasks share a verification section, each must use its own `verify:` entry;
 the legacy fallback is not used to infer commands for those subtasks.
+
+## 9. Review files written by the orchestrator
+
+`review-<subtask>-<agent-id>.md` files that `worker run --mode review` produces start with
+orchestrator-written headers; the **first** header line is `status: agreed | changes requested |
+unparsed`, followed by the provenance keys (`subtask`, `agent`, `provider`, `model`, `commit`,
+`attempt`, ...). A blank line follows, then the worker's final message verbatim.
+
+`status` is parsed by the orchestrator from the body: a line that is exactly `verdict: agreed` or
+`verdict: changes requested` (case-insensitive, trimmed). No such line, any other value or two
+disagreeing lines give `unparsed`, which never passes the integration gate. It is the reviewer's
+claim, not independently verified, and it is never inferred from prose or the exit code. A review run
+that changed files fails (`review_modified_files`) and writes no review file, so that failure always
+outranks an `agreed` verdict.

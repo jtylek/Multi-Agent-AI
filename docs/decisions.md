@@ -210,6 +210,9 @@ dry run unless `--execute`. Rules fixed by the coordinator's answers to the desi
 - There is no `job approve`: the driver prints the Git commands and the user merges. The integration
   branch stays local. `--execute` needs `--verify-command` and `--approved-provider-run`, a speed bump
   for agents and not a security control. Provider pool and models come from `--providers` / `--assign`.
+- Review files carry an orchestrator-written first header `status: agreed | changes requested | unparsed`
+  (Accepted, coordinator, Q12): strict exact-line parse of the reviewer's `verdict:` line, `unparsed` blocks
+  integration, formats.md section 9.
 
 ## Open
 

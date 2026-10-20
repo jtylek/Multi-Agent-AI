@@ -156,7 +156,8 @@ Mode: REVIEW (read-only).
 - Review {target}. Read the code and the diff (git diff / git log / git show are fine) and run
   the verification command where it does not write into the worktree; if it would need to
   write, do not run it and say so.
-- Reply with a concise result, in this shape:
+- Reply with a concise result, in this shape. The first line must be exactly `verdict: agreed` or
+  exactly `verdict: changes requested` (the orchestrator parses it; any other form blocks integration):
   verdict: agreed | changes requested
   commit reviewed: <sha>
   tests: <what you ran and the result, or "not run" and why>

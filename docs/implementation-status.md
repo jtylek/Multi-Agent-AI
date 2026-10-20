@@ -69,6 +69,7 @@ listed below is planned, not implemented.
   pricing). T15/T18 stay strict: with no listed CLI version a limit is a `provider_error`. Tested
   with fake executables only; see "Unverified until the first real run".
 - CLI `worker run --provider codex|copilot|claude --task T --subtask S --agent-id ID --mode
+- Review verdict header (T27, decision D19): `worker run --mode review` writes `status: agreed | changes requested | unparsed` as the first header of the review file, parsed strictly from an exact `verdict:` line in the reviewer's message. The verdict is the reviewer's claim, parsed by the orchestrator, not independently verified.
 - Job driver, stage A (T27, `job.py`, CLI `job plan | start | status | report`, decision D19): job
   state in an append-only event log with derived `job.json`, the failure policy table, the dry-run
   plan (waves, provider and independent-reviewer assignment, per-subtask verification commands,
