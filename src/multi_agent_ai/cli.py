@@ -14,7 +14,7 @@ from .notify import format_notify, notify_message
 from .reachability import discover_agents
 from .registry import reservation_conflicts, read_registry
 from .report import format_text, index_entries, scan, to_dict
-from . import workspace_cli
+from . import job_cli, workspace_cli
 from .state import StateIndex, init_state_root, read_config, resolve_state_root
 
 
@@ -84,6 +84,7 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--json", action="store_true", help="machine-readable output")
     _add_worker_parser(sub)
     workspace_cli.add_parser(sub)
+    job_cli.add_parser(sub)
     return parser
 
 
@@ -146,6 +147,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if item.status != "passed":
                     print(f"failed command: {' '.join(item.argv)}; logs: {item.stdout_file}, {item.stderr_file}", file=sys.stderr)
         return 0 if result.ok else 1
+    if args.command == "job":  # T27: see job_cli.py
+        return job_cli.main(args)
     if args.command == "workspace":  # T23: see workspace_cli.py
         return workspace_cli.main(args)
     if args.command == "worker":  # T12 block: see _add_worker_parser / _worker_main below
