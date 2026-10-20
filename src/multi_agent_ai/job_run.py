@@ -130,12 +130,15 @@ class Engine:
 
     def run(self) -> jb.JobState:
         self.rec.emit("job_state", state="preparing")
-        try:
-            ws.create_integration(self.project, self.state, self.plan.task_id, None, self.worktrees_root,
-                                  self.protected, execute=True)
-        except ws.WorkspaceError as exc:
-            return self._rest("paused_user", f"integration branch: {exc.code}: {exc.message}")
         records = ws.read_records(self.state, self.plan.task_id)
+        known = records.get(ws.INTEGRATION)
+        if known is None or known.state == "removed" or not Path(known.path).is_dir():  # a resumed job reuses it
+            try:
+                ws.create_integration(self.project, self.state, self.plan.task_id, None, self.worktrees_root,
+                                      self.protected, execute=True)
+            except ws.WorkspaceError as exc:
+                return self._rest("paused_user", f"integration branch: {exc.code}: {exc.message}")
+            records = ws.read_records(self.state, self.plan.task_id)
         for sid in self.planned:
             if self.job.subtasks[sid].state not in ("pending", "blocked_by") and sid in records:
                 self.paths[sid] = Path(records[sid].path)
@@ -200,15 +203,16 @@ class Engine:
                 continue
             if any(jb.areas_overlap(self.planned[sid].files, self.planned[r].files) for r in running.values()):
                 continue  # overlapping files/area: one after the other
-            try:
-                created = ws.create_subtask_worktree(self.project, self.state, self.plan.task_id, sid, "auto",
-                                                     self.worktrees_root, self.protected, execute=True)
-            except ws.WorkspaceError as exc:
-                pending.remove(sid)
-                self.rec.emit("subtask_state", subtask=sid, state="failed", reason=f"worktree: {exc.code}: {exc.message}")
-                return "paused_user", f"{sid}: worktree {exc.code}: {exc.message}"
-            pending.remove(sid)
-            record = created.record
+            record = ws.read_records(self.state, self.plan.task_id).get(sid)
+            if record is None or record.state == "removed" or not Path(record.path).is_dir():
+                try:
+                    record = ws.create_subtask_worktree(self.project, self.state, self.plan.task_id, sid, "auto",
+                                                        self.worktrees_root, self.protected, execute=True).record
+                except ws.WorkspaceError as exc:
+                    pending.remove(sid)
+                    self.rec.emit("subtask_state", subtask=sid, state="failed", reason=f"worktree: {exc.code}: {exc.message}")
+                    return "paused_user", f"{sid}: worktree {exc.code}: {exc.message}"
+            pending.remove(sid)  # (a retried subtask reuses its retained worktree and branch, with the earlier commits)
             self.paths[sid] = Path(record.path)
             self.rec.emit("subtask_state", subtask=sid, state="ready",
                           detail={"branch": record.branch, "worktree": record.path, "base": record.base,
@@ -616,6 +620,7 @@ def reconcile(state: StateRoot, rec: Recorder, retry: tuple[str, ...] = ()) -> d
             else:
                 why = (last or {}).get("failure_class") or "no attempt"
                 rec.emit("subtask_state", subtask=sid, state="failed", reason=f"stale: the implement attempt did not finish ({why})")
+                _retain(state, job.task_id, sid, "stale: the driver stopped during the implement attempt")
         elif sub.state in ("implemented", "verifying", "verified"):
             start_at[sid] = "verify"  # re-verification is deterministic and costs no provider quota
         elif sub.state == "reviewing":
@@ -633,6 +638,13 @@ def reconcile(state: StateRoot, rec: Recorder, retry: tuple[str, ...] = ()) -> d
         if sub.state == "blocked_by" and retry:
             rec.emit("subtask_state", subtask=sid, state="pending", reason="its dependency was retried")
     return start_at
+
+
+def _retain(state: StateRoot, task_id: str, sid: str, reason: str) -> None:
+    try:
+        ws.retain_failed(state, task_id, sid, reason, execute=True)
+    except ws.WorkspaceError:  # the worktree and its evidence stay on disk either way
+        pass
 
 
 def _agreed_review_exists(state: StateRoot, task_id: str, sid: str, tip: str | None) -> bool:

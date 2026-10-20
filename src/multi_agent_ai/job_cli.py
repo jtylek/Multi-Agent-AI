@@ -56,6 +56,17 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     start.add_argument("--approved-provider-run", action="store_true",
                        help="you were told the user approved this real provider run (recorded in the job events; "
                             "a speed bump for agents, NOT a security control)")
+    resume = jsub.add_parser("resume", help="continue a paused or interrupted job from its events (dry run unless --execute)")
+    common(resume, job_id="required")
+    resume.add_argument("--execute", action="store_true", help="really continue the job (default: dry run)")
+    resume.add_argument("--retry", action="append", default=[], metavar="SUBTASK",
+                        help="explicitly retry a failed, cancelled or stale subtask (resets its correction budget); repeatable")
+    resume.add_argument("--verify-command", action="append", default=[], help="override the full-suite command")
+    resume.add_argument("--approved-provider-run", action="store_true",
+                        help="you were told the user approved this real provider run (a speed bump for agents, NOT a security control)")
+    cancel = jsub.add_parser("cancel", help="stop a job: kill its running workers, keep all evidence (dry run unless --execute)")
+    common(cancel, job_id="required")
+    cancel.add_argument("--execute", action="store_true", help="really cancel (default: dry run)")
     common(jsub.add_parser("status", help="read-only: one job, or all jobs without --job"), job_id="optional")
     common(jsub.add_parser("report", help="print the run report of a job"), job_id="required")
 
@@ -102,6 +113,29 @@ def main(args: argparse.Namespace) -> int:
             final = job_run.run_job(root, Path(args.project_root).resolve(), job.job_id, options)
             print(json.dumps(final.as_dict(), indent=2, ensure_ascii=False) if args.json else jb.format_status(final))
             return 0 if final.state == "awaiting_approval" else 1
+        if command == "resume":
+            job, warnings = jb.load_job(root, args.job)
+            if not args.execute:
+                print(jb.format_status(job))
+                print(f"dry run: would reconcile unfinished attempts, retry {', '.join(args.retry) or 'nothing'} and continue; "
+                      "add --execute --approved-provider-run to do it", file=sys.stderr)
+                return 0
+            if not args.approved_provider_run:
+                raise jb.JobError("--execute launches real provider CLIs: pass --approved-provider-run once the user has "
+                                  "approved the run (a speed bump for agents, not a security control)")
+            from . import job_run
+
+            final = job_run.resume_job(root, Path(args.project_root).resolve(), args.job, retry=tuple(args.retry),
+                                       verify_commands=tuple(args.verify_command))
+            print(json.dumps(final.as_dict(), indent=2, ensure_ascii=False) if args.json else jb.format_status(final))
+            return 0 if final.state == "awaiting_approval" else 1
+        if command == "cancel":
+            from . import job_run
+
+            print(job_run.request_cancel(root, args.job, execute=args.execute))
+            if not args.execute:
+                print("dry run: nothing was changed; add --execute to cancel", file=sys.stderr)
+            return 0
         if command == "status":
             if args.job:
                 job, warnings = jb.load_job(root, args.job)

@@ -70,14 +70,19 @@ listed below is planned, not implemented.
   with fake executables only; see "Unverified until the first real run".
 - CLI `worker run --provider codex|copilot|claude --task T --subtask S --agent-id ID --mode
 - Review verdict header (T27, decision D19): `worker run --mode review` writes `status: agreed | changes requested | unparsed` as the first header of the review file, parsed strictly from an exact `verdict:` line in the reviewer's message. The verdict is the reviewer's claim, parsed by the orchestrator, not independently verified.
-- Job driver, stages A and B (T27, `job.py`, `job_run.py`, CLI `job plan | start | status | report`, decision
-  D19): append-only event log with derived `job.json`, the failure policy table, the dry-run plan, and
+- Job driver (T27, `job.py`, `job_run.py`, CLI `job plan | start | resume | cancel | status | report`, decision D19):
+  append-only event log with derived `job.json`, the failure policy table, the dry-run plan, and
   `job start --execute --verify-command C --approved-provider-run`: concurrent workers (threads, bounded by
   `--max-parallel` / `--max-per-provider`, overlapping areas serialised), orchestrator verification, one
   feedback round, review by a different provider in a throwaway detached worktree, dependency-ordered
   integration, the full suite on the integration branch and a stop at `awaiting_approval`; the run report is
-  rewritten at every resting state. Tested with injected fake workers in temporary Git repositories only; no real
-  provider run. Not implemented yet (stage C): cancel, resume after a crash, the driver lock, `--retry`.
+  rewritten at every resting state. One driver per job (`driver.lock`: exclusive create, pid and heartbeat,
+  stale after 10 minutes or a dead process). `job cancel` kills the running attempts (cancel event, process-tree
+  kill) and keeps all evidence; `job resume` reconciles attempts that have a start event and no end from the
+  runner's `result.json` (never reruns them; a lost attempt becomes `stale`), accepts a revised plan, and
+  `--retry SUBTASK` is the only way to run a failed subtask again. Tested with injected fake workers in
+  temporary Git repositories only; no real provider run. Per-phase job states (reviewing, verifying) are not
+  shown at job level yet; `job approve` does not exist (the user merges with Git).
 - CLI `worker run --provider codex|copilot --task T --subtask S --agent-id ID --mode
   review|implement --worktree ABS [--model M] [--timeout S] [--commit SHA]
   [--verify-command C] [--live-branch B]... [--pass-env NAME]... [--execute]`: one managed
