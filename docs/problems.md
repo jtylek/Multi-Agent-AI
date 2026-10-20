@@ -101,9 +101,19 @@ newest commit, and confirm each blocker against the code at the tip being merged
   cannot safely remove another agent's.
 - Process-count and timing tests are load-sensitive.
 
-### 8. README is behind the code
+### 8. `verify --command` is easy to misuse
 
-`README.md` still says "Early design / bootstrap" and that agent execution remains to be implemented. Managed
+Found by a smoke test of the command line on 2026-10-20 (main 962b04f, 567 tests passed). `--command` takes the
+command as separate tokens (`--command git status`), not one quoted string. A quoted string such as
+`--command "git status --short"` is treated as the name of one executable and fails with an
+`environment_error` ("no .exe/.com/.cmd/.bat found on PATH"), which hides the real cause. Arguments that start
+with `-` (for example `--short` or `-c`) are rejected by the argument parser as unrecognized options, so a
+verification command with flags cannot be given this way; the job driver takes its command as
+`--verify-command` instead. Worth a clearer error message and a documented way to pass flags.
+
+### 9. README was behind the code (status banner and implementation section fixed in 962b04f)
+
+Before 962b04f, `README.md` said "Early design / bootstrap" and that agent execution remains to be implemented. Managed
 workers, the workspace manager, the verification engine, the provider adapters and the job driver exist on
 `main`. The design sections are still accurate; the status banner, "Current implementation" and the quick start
 need a targeted update (not a full rewrite) once real runs have been shown to work.
