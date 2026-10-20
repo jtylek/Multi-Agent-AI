@@ -225,6 +225,7 @@ class Engine:
             self.rec.emit("subtask_state", subtask=sid, state="cancelled", reason="cancel requested")
             return "cancelled", "cancel requested"
         if result.status == OK:
+            self.rec.emit("integration_started", subtask=sid, tip=result.tip)  # logged before the action (design 3)
             report = ws.integrate(self.project, self.state, self.plan.task_id, [sid], self.protected, execute=True)
             item = report.items[0]
             self.rec.emit("integration", subtask=sid, result=item.result, code=item.code, detail=item.detail,

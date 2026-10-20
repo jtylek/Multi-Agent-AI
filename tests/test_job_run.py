@@ -373,3 +373,30 @@ def test_every_worker_id_is_unique_and_never_a_product_name(world):
     world.run()
     ids = [l["agent"] for l in world.launches]
     assert len(ids) == len(set(ids)) and not {i.lower() for i in ids} & {"codex", "copilot", "claude", "code"}
+
+
+def test_integration_is_logged_before_it_happens(world, monkeypatch):
+    real = ws.integrate
+    seen = []
+
+    def integrate(project, state, task, order, *a, **kw):
+        events, _ = jb.read_events(jb.job_dir(state, "demo-20261020-030000") / jb.EVENTS_FILE)
+        seen.append([(e["kind"], e.get("subtask")) for e in events if e["kind"].startswith("integration")])
+        return real(project, state, task, order, *a, **kw)
+    monkeypatch.setattr(ws, "integrate", integrate)
+    job = world.run()
+    assert job.state == "awaiting_approval" and len(seen) == 3
+    for number, (sid, before) in enumerate(zip(("A", "B", "C"), seen)):
+        assert ("integration_started", sid) in before  # the start event exists when the merge begins
+        assert sum(1 for kind, _ in before if kind == "integration") == number  # earlier results only
+
+
+def test_a_crash_inside_integration_leaves_a_start_event_and_no_result(world, monkeypatch):
+    def boom(*a, **kw):
+        raise SystemExit("power loss during the merge")
+    monkeypatch.setattr(ws, "integrate", boom)
+    with pytest.raises(SystemExit):
+        world.run()
+    events, _ = jb.read_events(jb.job_dir(world.state, "demo-20261020-030000") / jb.EVENTS_FILE)
+    kinds = [e["kind"] for e in events]
+    assert "integration_started" in kinds and "integration" not in kinds
