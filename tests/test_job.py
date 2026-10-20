@@ -200,8 +200,16 @@ def test_start_execute_is_refused_without_verify_command_and_approval(project, m
     base = ["job", "start", "--task", TASK, "--project-root", str(root), "--execute"]
     assert main(base) == 1 and "--verify-command" in capsys.readouterr().err
     assert main([*base, "--verify-command", "x"]) == 1 and "--approved-provider-run" in capsys.readouterr().err
-    assert main([*base, "--verify-command", "x", "--approved-provider-run"]) == 1
-    assert not (root / ".multi-agent-ai" / jb.JOBS_DIR).exists()  # stage A launches nothing
+    assert not (root / ".multi-agent-ai" / jb.JOBS_DIR).exists()  # both refusals happened before anything was written
+
+    from multi_agent_ai import job_run
+    started = []
+    monkeypatch.setattr(job_run, "run_job", lambda state, project, job_id, options, hooks=None: started.append(job_id) or
+                        jb.load_job(state, job_id)[0])  # never start a real provider from a unit test
+    assert main([*base, "--verify-command", "x", "--approved-provider-run"]) == 1  # job is only "created": not awaiting_approval
+    assert len(started) == 1
+    events = jb.read_events(next((root / ".multi-agent-ai" / jb.JOBS_DIR).iterdir()) / jb.EVENTS_FILE)[0]
+    assert events[0]["approved_provider_run"] is True
 
 
 def test_worker_agent_ids_are_valid_and_unique_per_attempt():

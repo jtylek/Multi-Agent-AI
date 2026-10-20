@@ -462,51 +462,57 @@ def read_events(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
     return events, warnings
 
 
+def apply_event(job: JobState | None, e: Mapping[str, Any]) -> JobState | None:
+    """Apply one event to the state (``None`` until ``job_created``) and return it."""
+    kind = e["kind"]
+    if kind == "job_created":
+        job = JobState(e["job_id"], e["task_id"], base_commit=e.get("base_commit"),
+                       integration_branch=e.get("integration_branch"), started=e["at"],
+                       options=dict(e.get("options", {})))
+        for s in e.get("subtasks", []):
+            job.subtasks[s["id"]] = SubtaskState(s["id"], provider=s.get("provider"), model=s.get("model"),
+                                                 plan_state=s.get("plan_state"))
+    if job is None:
+        return None
+    job.events += 1
+    job.updated = e["at"]
+    if e.get("plan_revision") is not None:
+        job.plan_revision = e["plan_revision"]
+    if kind == "job_state":
+        job.state, job.reason = e["state"], e.get("reason")
+    elif kind == "subtask_state":
+        sub = job.subtasks.setdefault(e["subtask"], SubtaskState(e["subtask"]))
+        sub.state, sub.reason = e["state"], e.get("reason")
+        if e.get("commit"):
+            sub.commit = e["commit"]
+        for key, value in (e.get("detail") or {}).items():
+            sub.detail[key] = value
+    elif kind == "budget_spent":
+        sub = job.subtasks.setdefault(e["subtask"], SubtaskState(e["subtask"]))
+        sub.budget[e["cause"]] = sub.budget.get(e["cause"], 0) + 1
+    elif kind == "attempt_started":
+        sub = job.subtasks.setdefault(e["subtask"], SubtaskState(e["subtask"]))
+        sub.attempts += 1
+        sub.attempt_ids.append(e["attempt"])
+        job.attempts.append({k: v for k, v in e.items() if k not in ("seq", "kind")} | {"finished": False})
+    elif kind == "attempt_finished":
+        for record in job.attempts:
+            if record.get("attempt") == e["attempt"]:
+                record.update({k: v for k, v in e.items() if k not in ("seq", "kind", "at")})
+                record["finished"] = True
+    elif kind == "integration":
+        job.integration = {k: v for k, v in e.items() if k not in ("seq", "kind")}
+    elif kind == "final_check":
+        job.final_check = {k: v for k, v in e.items() if k not in ("seq", "kind")}
+    return job
+
+
 def replay(events: Iterable[Mapping[str, Any]]) -> JobState | None:
     """Derive the job state from its events. The result is a pure function of the events, so a deleted or
     stale ``job.json`` is rebuilt exactly."""
     job: JobState | None = None
     for e in events:
-        kind = e["kind"]
-        if kind == "job_created":
-            job = JobState(e["job_id"], e["task_id"], base_commit=e.get("base_commit"),
-                           integration_branch=e.get("integration_branch"), started=e["at"],
-                           options=dict(e.get("options", {})))
-            for s in e.get("subtasks", []):
-                job.subtasks[s["id"]] = SubtaskState(s["id"], provider=s.get("provider"), model=s.get("model"),
-                                                     plan_state=s.get("plan_state"))
-        if job is None:
-            continue
-        job.events += 1
-        job.updated = e["at"]
-        if e.get("plan_revision") is not None:
-            job.plan_revision = e["plan_revision"]
-        if kind == "job_state":
-            job.state, job.reason = e["state"], e.get("reason")
-        elif kind == "subtask_state":
-            sub = job.subtasks.setdefault(e["subtask"], SubtaskState(e["subtask"]))
-            sub.state, sub.reason = e["state"], e.get("reason")
-            if e.get("commit"):
-                sub.commit = e["commit"]
-            for key, value in (e.get("detail") or {}).items():
-                sub.detail[key] = value
-        elif kind == "budget_spent":
-            sub = job.subtasks.setdefault(e["subtask"], SubtaskState(e["subtask"]))
-            sub.budget[e["cause"]] = sub.budget.get(e["cause"], 0) + 1
-        elif kind == "attempt_started":
-            sub = job.subtasks.setdefault(e["subtask"], SubtaskState(e["subtask"]))
-            sub.attempts += 1
-            sub.attempt_ids.append(e["attempt"])
-            job.attempts.append({k: v for k, v in e.items() if k not in ("seq", "kind")} | {"finished": False})
-        elif kind == "attempt_finished":
-            for record in job.attempts:
-                if record.get("attempt") == e["attempt"]:
-                    record.update({k: v for k, v in e.items() if k not in ("seq", "kind", "at")})
-                    record["finished"] = True
-        elif kind == "integration":
-            job.integration = {k: v for k, v in e.items() if k not in ("seq", "kind")}
-        elif kind == "final_check":
-            job.final_check = {k: v for k, v in e.items() if k not in ("seq", "kind")}
+        job = apply_event(job, e)
     return job
 
 

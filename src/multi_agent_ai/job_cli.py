@@ -95,7 +95,13 @@ def main(args: argparse.Namespace) -> int:
             if not options.approved_provider_run:
                 raise jb.JobError("--execute launches real provider CLIs: pass --approved-provider-run once the user "
                                   "has approved the run (a speed bump for agents, not a security control)")
-            raise jb.JobError("--execute is not implemented yet (T27 stage B); the dry run is complete")
+            from . import job_run
+
+            job = jb.create_job(root, plan, options)
+            print(f"job {job.job_id} created; running (Ctrl+C stops the driver, workers are not left behind)", file=sys.stderr)
+            final = job_run.run_job(root, Path(args.project_root).resolve(), job.job_id, options)
+            print(json.dumps(final.as_dict(), indent=2, ensure_ascii=False) if args.json else jb.format_status(final))
+            return 0 if final.state == "awaiting_approval" else 1
         if command == "status":
             if args.job:
                 job, warnings = jb.load_job(root, args.job)

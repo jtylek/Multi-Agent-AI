@@ -70,11 +70,14 @@ listed below is planned, not implemented.
   with fake executables only; see "Unverified until the first real run".
 - CLI `worker run --provider codex|copilot|claude --task T --subtask S --agent-id ID --mode
 - Review verdict header (T27, decision D19): `worker run --mode review` writes `status: agreed | changes requested | unparsed` as the first header of the review file, parsed strictly from an exact `verdict:` line in the reviewer's message. The verdict is the reviewer's claim, parsed by the orchestrator, not independently verified.
-- Job driver, stage A (T27, `job.py`, CLI `job plan | start | status | report`, decision D19): job
-  state in an append-only event log with derived `job.json`, the failure policy table, the dry-run
-  plan (waves, provider and independent-reviewer assignment, per-subtask verification commands,
-  serialised overlapping areas) and the run report. `job start --execute` is refused: running workers,
-  review, integration, cancel and resume are stages B and C and are not implemented.
+- Job driver, stages A and B (T27, `job.py`, `job_run.py`, CLI `job plan | start | status | report`, decision
+  D19): append-only event log with derived `job.json`, the failure policy table, the dry-run plan, and
+  `job start --execute --verify-command C --approved-provider-run`: concurrent workers (threads, bounded by
+  `--max-parallel` / `--max-per-provider`, overlapping areas serialised), orchestrator verification, one
+  feedback round, review by a different provider in a throwaway detached worktree, dependency-ordered
+  integration, the full suite on the integration branch and a stop at `awaiting_approval`; the run report is
+  rewritten at every resting state. Tested with injected fake workers in temporary Git repositories only; no real
+  provider run. Not implemented yet (stage C): cancel, resume after a crash, the driver lock, `--retry`.
 - CLI `worker run --provider codex|copilot --task T --subtask S --agent-id ID --mode
   review|implement --worktree ABS [--model M] [--timeout S] [--commit SHA]
   [--verify-command C] [--live-branch B]... [--pass-env NAME]... [--execute]`: one managed

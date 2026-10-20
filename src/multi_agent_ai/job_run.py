@@ -1,0 +1,458 @@
+"""End-to-end job driver (T27), stage B: run a job. Concurrent workers, orchestrator verification, independent
+review, dependency-ordered integration, the full suite, and a stop at ``awaiting_approval``.
+
+Threads, not processes: a thread only blocks on :func:`run_worker`, which starts the provider CLI as a
+child process (job object, process-tree kill, timeout) - see the design note, section 3. All scheduling,
+integration and Git-record changes happen on the driver's own thread; pool threads run one subtask's
+implement -> verify -> review pipeline and return a :class:`SubtaskResult`. Events are appended under a
+lock. The driver never merges into the user's branch, never pushes, and never edits ``plan.md``.
+"""
+
+from __future__ import annotations
+
+import threading
+from collections.abc import Callable, Mapping
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from . import job as jb
+from . import verify as verify_mod
+from . import workspace as ws
+from .board import read_plan
+from .document import DocumentError, read_document
+from .state import StateRoot
+from .workers import failures as F
+from .workers import gitops
+from .workers.runner import UsageError, WorkerOutcome, WorkerRequest, run_worker
+
+CLARIFY = ("Your previous attempt changed no file or produced output the orchestrator could not read. Make the "
+           "change the subtask asks for inside the worktree and reply in the requested shape.")
+USAGE_ERROR = "usage_error"
+DRIVER_ERROR = "driver_error"
+REVIEW_UNPARSED = "review_unparsed"
+OK, FAILED, HALT = "ok", "failed", "halt"
+
+
+@dataclass
+class Hooks:
+    """Injection points so tests need no provider and no clock games."""
+
+    worker: Callable[[WorkerRequest], WorkerOutcome] = run_worker
+    verify: Callable[..., verify_mod.VerificationResult] = verify_mod.verify
+    available: Callable[[str], bool] = jb.provider_available
+    env: Mapping[str, str] | None = None
+    poll_seconds: float = 1.0
+
+
+@dataclass
+class SubtaskResult:
+    status: str
+    """``ok`` (reviewed or waived, ready to integrate), ``failed`` (this subtask only) or ``halt`` (the job
+    stops scheduling and waits for the user)."""
+    failure_class: str | None = None
+    reason: str = ""
+    tip: str | None = None
+    halt_state: str = "paused_user"
+
+
+@dataclass
+class ReviewResult:
+    kind: str
+    """``agreed``, ``changes``, ``failed``."""
+    failure_class: str | None = None
+    text: str = ""
+    reason: str = ""
+
+
+class Recorder:
+    """Thread-safe event writer that keeps the in-memory job state and ``job.json`` in step."""
+
+    def __init__(self, state: StateRoot, job: jb.JobState):
+        self.state, self.job = state, job
+        self.dir = jb.job_dir(state, job.job_id)
+        self.lock = threading.Lock()
+
+    def emit(self, kind: str, **data: Any) -> dict[str, Any]:
+        with self.lock:
+            event = jb.append_event(self.dir, kind, self.job.plan_revision, **data)
+            jb.apply_event(self.job, event)
+            jb.write_job_json(self.dir, self.job)
+            return event
+
+    def report(self) -> None:
+        with self.lock:
+            jb.write_report(self.dir, self.job)
+
+    def count_attempts(self, subtask: str, role: str) -> int:
+        with self.lock:
+            return sum(1 for a in self.job.attempts if a.get("subtask") == subtask and a.get("role") == role)
+
+    def spend(self, subtask: str, cause: str, limit: int = 1) -> bool:
+        """Take one correction from the budget (stored in the events, so a resume cannot reset it)."""
+        with self.lock:
+            if self.job.subtasks[subtask].budget.get(cause, 0) >= limit:
+                return False
+        self.emit("budget_spent", subtask=subtask, cause=cause)
+        return True
+
+
+class Engine:
+    def __init__(self, state: StateRoot, project_root: Path, job: jb.JobState, options: jb.JobOptions,
+                 plan: jb.JobPlan, hooks: Hooks | None = None):
+        self.state, self.project, self.options, self.plan = state, project_root.resolve(), options, plan
+        self.hooks = hooks or Hooks()
+        self.rec = Recorder(state, job)
+        self.job = job
+        self.planned = {s.id: s for s in plan.subtasks if not s.skipped}
+        self.protected = (*ws.DEFAULT_PROTECTED, *options.live_branches)
+        self.worktrees_root = Path(options.worktrees_root).resolve() if options.worktrees_root else None
+        self.paths: dict[str, Path] = {}
+        self.semaphores = {p: threading.Semaphore(options.max_per_provider) for p in options.providers}
+        self.cancel = threading.Event()
+
+    # --- the loop (driver thread) -------------------------------------------------------------
+
+    def run(self) -> jb.JobState:
+        self.rec.emit("job_state", state="preparing")
+        try:
+            ws.create_integration(self.project, self.state, self.plan.task_id, None, self.worktrees_root,
+                                  self.protected, execute=True)
+        except ws.WorkspaceError as exc:
+            return self._rest("paused_user", f"integration branch: {exc.code}: {exc.message}")
+        self.rec.emit("job_state", state="running")
+        halt: tuple[str, str] | None = None
+        pending = [sid for sid in self.planned if self.job.subtasks[sid].state == "pending"]
+        running: dict[Future, str] = {}
+        with ThreadPoolExecutor(max_workers=self.options.max_parallel, thread_name_prefix="job") as pool:
+            while True:
+                halt = halt or self._plan_changed() or self._cancelled()
+                if halt is None:
+                    halt = self._start_ready(pending, running, pool)
+                if not running:
+                    break
+                done, _ = wait(running, timeout=self.hooks.poll_seconds, return_when=FIRST_COMPLETED)
+                for future in done:
+                    sid = running.pop(future)
+                    try:
+                        result = future.result()
+                    except Exception as exc:  # a pipeline bug must not take the driver down
+                        result = SubtaskResult(HALT, DRIVER_ERROR, f"{type(exc).__name__}: {exc}")
+                    halt = self._finish_subtask(sid, result) or halt
+        return self._conclude(halt)
+
+    def _plan_changed(self) -> tuple[str, str] | None:
+        parsed = read_plan(self.state.tasks / self.plan.task_id)
+        if parsed.value is None:
+            return "paused_plan_changed", f"the plan is no longer readable: {'; '.join(parsed.errors)}"
+        if parsed.value.revision != self.job.plan_revision:
+            return "paused_plan_changed", f"plan revision {self.job.plan_revision} -> {parsed.value.revision}"
+        return None
+
+    def _cancelled(self) -> tuple[str, str] | None:
+        return ("cancelled", "cancel requested") if self.cancel.is_set() else None
+
+    def _start_ready(self, pending: list[str], running: dict[Future, str], pool: ThreadPoolExecutor) -> tuple[str, str] | None:
+        for sid in list(pending):
+            if len(running) >= self.options.max_parallel:
+                break
+            deps = [d for d in self.planned[sid].depends_on if d in self.job.subtasks]
+            broken = [d for d in deps if self.job.subtasks[d].state in ("failed", "blocked_by", "retained", "cancelled")]
+            if broken:
+                pending.remove(sid)
+                self.rec.emit("subtask_state", subtask=sid, state="blocked_by", reason=f"depends on {', '.join(broken)}")
+                continue
+            if not all(self.job.subtasks[d].state == "integrated" for d in deps):
+                continue
+            if any(jb.areas_overlap(self.planned[sid].files, self.planned[r].files) for r in running.values()):
+                continue  # overlapping files/area: one after the other
+            try:
+                created = ws.create_subtask_worktree(self.project, self.state, self.plan.task_id, sid, "auto",
+                                                     self.worktrees_root, self.protected, execute=True)
+            except ws.WorkspaceError as exc:
+                pending.remove(sid)
+                self.rec.emit("subtask_state", subtask=sid, state="failed", reason=f"worktree: {exc.code}: {exc.message}")
+                return "paused_user", f"{sid}: worktree {exc.code}: {exc.message}"
+            pending.remove(sid)
+            record = created.record
+            self.paths[sid] = Path(record.path)
+            self.rec.emit("subtask_state", subtask=sid, state="ready",
+                          detail={"branch": record.branch, "worktree": record.path, "base": record.base,
+                                  "base_from": record.base_from})
+            running[pool.submit(self._pipeline, sid)] = sid
+        return None
+
+    def _finish_subtask(self, sid: str, result: SubtaskResult) -> tuple[str, str] | None:
+        if result.status == OK:
+            report = ws.integrate(self.project, self.state, self.plan.task_id, [sid], self.protected, execute=True)
+            item = report.items[0]
+            self.rec.emit("integration", subtask=sid, result=item.result, code=item.code, detail=item.detail,
+                          tip=report.tip, merge_commit=item.merge_commit, commit=item.commit)
+            if item.result in ("merged", "already_merged"):
+                self.rec.emit("subtask_state", subtask=sid, state="integrated", commit=item.commit,
+                              detail={"merge_commit": item.merge_commit})
+                return None
+            cls = "merge_conflict" if item.result == "conflict" else (item.code or "integration_refused")
+            self.rec.emit("subtask_state", subtask=sid, state="failed", reason=f"{cls}: {item.detail}")
+            self._retain(sid, f"{cls}: {item.detail}")
+            return "paused_user", f"{sid}: {jb.policy_for('merge_conflict' if item.result == 'conflict' else cls).reason}"
+        self.rec.emit("subtask_state", subtask=sid, state="failed",
+                      reason=f"{result.failure_class}: {result.reason}"[:500])
+        self._retain(sid, f"{result.failure_class}: {result.reason}")
+        if result.status == HALT:
+            return result.halt_state, f"{sid}: {result.failure_class}: {result.reason}"[:500]
+        return None
+
+    def _retain(self, sid: str, reason: str) -> None:
+        try:
+            ws.retain_failed(self.state, self.plan.task_id, sid, reason[:300], execute=True)
+        except ws.WorkspaceError as exc:  # evidence stays on disk either way
+            self.rec.emit("note", subtask=sid, text=f"could not mark the worktree retained: {exc.code}")
+
+    def _conclude(self, halt: tuple[str, str] | None) -> jb.JobState:
+        if halt:
+            return self._rest(*halt)
+        states = {sid: self.job.subtasks[sid].state for sid in self.planned}
+        bad = sorted(sid for sid, st in states.items() if st != "integrated")
+        if bad:
+            return self._rest("failed", f"not integrated: {', '.join(bad)} (see the report for evidence)")
+        self.rec.emit("job_state", state="final_check")
+        integration = ws.read_records(self.state, self.plan.task_id).get(ws.INTEGRATION)
+        commands = tuple(verify_mod.CommandSpec(verify_mod.parse_command(c), name="full-suite")
+                         for c in self.options.verify_commands)
+        run_dir = self.rec.dir / "final-check"
+        result = self.hooks.verify(Path(integration.path), verify_mod.VerificationSpec(commands=commands, expected_clean=True),
+                                   run_dir=run_dir)
+        self.rec.emit("final_check", status=result.status, run_dir=str(run_dir), error=result.error,
+                      commands=[{"argv": c.argv, "status": c.status, "exit_code": c.exit_code} for c in result.commands])
+        if not result.ok:
+            return self._rest("failed", f"the full suite on the integration branch did not pass ({result.status})")
+        return self._rest("awaiting_approval", None)
+
+    def _rest(self, state: str, reason: str | None) -> jb.JobState:
+        self.rec.emit("job_state", state=state, reason=reason)
+        self.rec.report()
+        return self.job
+
+    # --- one subtask (pool thread) -------------------------------------------------------------
+
+    def _pipeline(self, sid: str) -> SubtaskResult:
+        plan, path = self.planned[sid], self.paths[sid]
+        feedback: str | None = None
+        while True:
+            try:
+                ws.preflight_for_execution(self.project, self.state, self.plan.task_id, sid, self.protected)
+            except ws.WorkspaceError as exc:
+                return SubtaskResult(HALT, exc.code, exc.message)
+            self.rec.emit("subtask_state", subtask=sid, state="implementing")
+            out = self._attempt(sid, "implement", plan.author_provider, plan.model, path, feedback=feedback)
+            if out.failure_class:
+                cause = out.failure_class
+                policy = jb.policy_for(cause)
+                if policy.action == jb.RETRY_ONCE and self._clean(path) and self.rec.spend(sid, cause):
+                    feedback = CLARIFY if cause in (F.NO_CHANGES, F.MALFORMED_OUTPUT) else None
+                    continue
+                return self._terminal(cause, policy, self._detail(out))
+            tip = out.commit or gitops.git(path, "rev-parse", "HEAD").strip()
+            self.rec.emit("subtask_state", subtask=sid, state="implemented", commit=tip)
+
+            verification = self._verify(sid, path, tip)
+            if verification is not None:
+                cause, text = verification
+                policy = jb.policy_for(cause)
+                if policy.action == jb.FEEDBACK_ONCE and self.rec.spend(sid, cause):
+                    feedback = text
+                    continue
+                return self._terminal(cause, policy, text[-300:])
+            self.rec.emit("subtask_state", subtask=sid, state="verified", commit=tip)
+
+            if plan.review == "waived":
+                self.rec.emit("subtask_state", subtask=sid, state="reviewed", commit=tip,
+                              detail={"review": "waived"})
+                return SubtaskResult(OK, tip=tip)
+            review = self._review(sid, tip)
+            if review.kind == "agreed":
+                self.rec.emit("subtask_state", subtask=sid, state="reviewed", commit=tip, detail={"review": "agreed"})
+                return SubtaskResult(OK, tip=tip)
+            if review.kind == "failed":
+                return self._terminal(review.failure_class or REVIEW_UNPARSED, jb.policy_for(review.failure_class or REVIEW_UNPARSED),
+                                      review.reason)
+            self.rec.emit("subtask_state", subtask=sid, state="changes_requested", reason="the reviewer asked for changes")
+            policy = jb.policy_for("changes_requested")
+            if self.rec.spend(sid, "changes_requested"):
+                feedback = review.text
+                continue
+            return SubtaskResult(HALT, "changes_requested", "second review also asked for changes: " + review.text[:200])
+
+    def _terminal(self, cause: str, policy: jb.Policy, detail: str) -> SubtaskResult:
+        reason = f"{policy.reason}. {detail}".strip()
+        if policy.action in (jb.STOP_JOB, jb.PAUSE_USER):
+            return SubtaskResult(HALT, cause, reason)
+        return SubtaskResult(FAILED, cause, reason)
+
+    @staticmethod
+    def _clean(path: Path) -> bool:
+        try:
+            return not gitops.snapshot(path).status
+        except gitops.GitError:
+            return False
+
+    @staticmethod
+    def _detail(out: "Attempt") -> str:
+        return out.detail
+
+    def _attempt(self, sid: str, role: str, provider: str, model: str | None, worktree: Path, *,
+                 feedback: str | None = None, commit: str | None = None) -> "Attempt":
+        number = self.rec.count_attempts(sid, role) + 1
+        agent = jb.worker_agent_id(self.job.job_id, provider, sid, role, number)
+        timeout = self.options.review_timeout if role == "review" else self.options.worker_timeout
+        self.rec.emit("attempt_started", subtask=sid, attempt=agent, agent=agent, role=role, provider=provider,
+                      model=model, number=number, worktree=str(worktree), commit=commit)
+        request = WorkerRequest(
+            provider=provider, task_id=self.plan.task_id, subtask_id=sid, agent_id=agent,
+            mode="review" if role == "review" else "implement", worktree=worktree, project_root=self.project,
+            state_root=self.state, model=model, timeout=timeout, commit=commit,
+            live_branches=tuple(self.options.live_branches), pass_env=tuple(self.options.pass_env),
+            verify_command=self.planned[sid].verify_command, feedback=feedback)
+        outcome: WorkerOutcome | None = None
+        failure, detail = None, ""
+        with self.semaphores[provider]:
+            try:
+                outcome = self.hooks.worker(request)
+                failure = outcome.failure_class
+                detail = str(outcome.result.get("detail") or "")
+            except UsageError as exc:
+                failure, detail = USAGE_ERROR, str(exc)
+            except Exception as exc:
+                failure, detail = DRIVER_ERROR, f"{type(exc).__name__}: {exc}"
+        result = outcome.result if outcome else {}
+        self.rec.emit("attempt_finished", attempt=agent, runner_attempt=outcome.attempt_id if outcome else None,
+                      exit_code=outcome.exit_code if outcome else None, failure_class=failure, detail=detail[:300],
+                      run_dir=str(outcome.run_dir) if outcome else None, usage=result.get("usage", "unknown"),
+                      duration_seconds=result.get("duration_seconds"), commit=outcome.commit if outcome else None,
+                      review_path=str(outcome.review_path) if outcome and outcome.review_path else None,
+                      files_changed=result.get("files_changed"))
+        return Attempt(failure, detail, outcome)
+
+    def _verify(self, sid: str, worktree: Path, tip: str) -> tuple[str, str] | None:
+        """None when verification passed, else (failure class, feedback text)."""
+        self.rec.emit("subtask_state", subtask=sid, state="verifying", commit=tip)
+        command = self.planned[sid].verify_command
+        index = self.rec.count_attempts(sid, "implement")
+        run_dir = self.rec.dir / "verify" / f"{sid}-{index}"
+        try:
+            spec = verify_mod.VerificationSpec(
+                commands=(verify_mod.CommandSpec(verify_mod.parse_command(command), name=sid),),
+                expected_commit=tip, expected_clean=True)
+            result = self.hooks.verify(worktree, spec, run_dir=run_dir)
+        except (ValueError, TypeError) as exc:
+            self.rec.emit("subtask_state", subtask=sid, state="verification_failed", reason=str(exc)[:300])
+            return "environment_error", str(exc)
+        self.rec.emit("subtask_state", subtask=sid, state="verified" if result.ok else "verification_failed",
+                      commit=tip, detail={"verification": {"status": result.status, "run_dir": result.run_dir,
+                                                           "error": result.error}})
+        if result.ok:
+            return None
+        return result.status, self._failure_text(result, run_dir)
+
+    @staticmethod
+    def _failure_text(result: verify_mod.VerificationResult, run_dir: Path) -> str:
+        parts = [f"verification status: {result.status}"]
+        if result.error:
+            parts.append(result.error)
+        if result.missing_files:
+            parts.append("missing files: " + ", ".join(result.missing_files))
+        for item in result.commands:
+            if item.status == "passed":
+                continue
+            parts.append("$ " + " ".join(item.argv) + f" -> exit {item.exit_code}")
+            for name in (item.stdout_file, item.stderr_file):
+                file = Path(name)
+                file = file if file.is_absolute() else run_dir / file
+                try:
+                    parts.append(file.read_bytes()[-3000:].decode("utf-8", "replace"))
+                except OSError:
+                    pass
+        return "\n".join(parts)
+
+    # --- review ---------------------------------------------------------------------------------
+
+    def _review(self, sid: str, tip: str) -> ReviewResult:
+        author = self.planned[sid].author_provider
+        tried: list[str] = []
+        candidates = [self.planned[sid].reviewer_provider] if self.planned[sid].reviewer_provider else []
+        while True:
+            if not candidates:
+                return ReviewResult("failed", "no_independent_reviewer", reason="no provider other than the author's is left to review")
+            reviewer = candidates.pop(0)
+            tried.append(reviewer)
+            self.rec.emit("subtask_state", subtask=sid, state="reviewing", commit=tip)
+            try:
+                path = self._review_worktree(sid, tip, len(tried))
+            except gitops.GitError as exc:
+                return ReviewResult("failed", F.ENVIRONMENT, reason=f"review worktree: {exc}")
+            try:
+                out = self._attempt(sid, "review", reviewer, None, path, commit=tip)
+            finally:
+                self._remove_review_worktree(path)
+            if out.failure_class == F.REVIEW_MODIFIED_FILES:
+                candidates = [p for p in self.options.providers if p != author and p not in tried and self.hooks.available(p)][:1]
+                continue
+            if out.failure_class:
+                return ReviewResult("failed", out.failure_class, reason=out.detail)
+            review_path = out.outcome.review_path if out.outcome else None
+            status, commit = ws._review_commit(review_path) if review_path else (None, None)
+            if status == "agreed" and commit and tip.startswith(commit[:7]) or status == "agreed" and commit and commit.startswith(tip[:7]):
+                return ReviewResult("agreed")
+            if status == "changes requested":
+                return ReviewResult("changes", text=self._review_text(review_path))
+            return ReviewResult("failed", REVIEW_UNPARSED,
+                                reason=f"review verdict {status or 'missing'} for commit {commit or '?'}; nothing is inferred")
+
+    @staticmethod
+    def _review_text(path: Path | None) -> str:
+        try:
+            return read_document(path).body.strip()
+        except (OSError, DocumentError, AttributeError):
+            return "The reviewer asked for changes; the review file could not be read."
+
+    def _review_root(self) -> Path:
+        return self.worktrees_root or ws.default_worktrees_root(self.project)
+
+    def _review_worktree(self, sid: str, sha: str, number: int) -> Path:
+        path = self._review_root() / f"{self.project.name}-{sid}-review{number}-{self.job.job_id[-6:]}"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        gitops.git(self.project, "worktree", "add", "--detach", str(path), sha)
+        return path
+
+    def _remove_review_worktree(self, path: Path) -> None:
+        """Throwaway detached checkout owned by this driver; ``--force`` is for this path only."""
+        try:
+            gitops.git(self.project, "worktree", "remove", "--force", str(path))
+        except gitops.GitError:
+            self.rec.emit("note", text=f"review worktree {path} could not be removed")
+
+
+@dataclass
+class Attempt:
+    failure_class: str | None
+    detail: str
+    outcome: WorkerOutcome | None
+    @property
+    def commit(self) -> str | None:
+        return self.outcome.commit if self.outcome else None
+
+
+def run_job(state: StateRoot, project_root: Path, job_id: str, options: jb.JobOptions, hooks: Hooks | None = None) -> jb.JobState:
+    """Run (stage B: start) a created job in this process until it rests. Returns the final state."""
+    job, _ = jb.load_job(state, job_id)
+    hooks = hooks or Hooks()
+    plan = jb.build_plan(state, job.task_id, options, hooks.available)
+    engine = Engine(state, project_root, job, options, plan, hooks)
+    if plan.plan_revision != job.plan_revision:
+        engine.rec.emit("job_state", state="paused_plan_changed",
+                        reason=f"plan revision {job.plan_revision} -> {plan.plan_revision}")
+        engine.rec.report()
+        return engine.job
+    return engine.run()
