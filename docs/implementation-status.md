@@ -56,7 +56,19 @@ listed below is planned, not implemented.
   the first conflict, removal of completed worktrees only (branches are never deleted) and
   retained failed worktrees. Dry run unless `--execute`. Tested in temporary Git repositories only;
   `worker run` does not call its preflight yet (follow-up).
-- CLI `worker run --provider codex|copilot --task T --subtask S --agent-id ID --mode
+- Claude Code worker adapter (T24, `workers/claude.py`, `worker run --provider claude`): headless
+  `claude -p --output-format=json --restricted --safe-mode --permission-prompts=none` with an
+  explicit tool policy as data (review: read tools, git read commands and the verification command,
+  no Edit/Write; implement: plus Edit/Write inside the worktree), the prompt on stdin, no
+  `--permission-mode` and no bypass flag (a test scans every argv), review runs not persisted and
+  implement runs started with `--session-id` so a limit can be resumed. The environment is the T12
+  allowlist plus `CLAUDE_CONFIG_DIR`/`CLAUDE_CODE_GIT_BASH_PATH`: the parent session's `CLAUDECODE`,
+  `CLAUDE_CODE_*` and `ANTHROPIC_*` variables are dropped, and an API key or token needs an explicit
+  `--pass-env`. `--max-budget-usd N` (claude only, off by default, must be positive) is passed
+  through. Output is parsed defensively; the provider-reported cost is recorded as such (not API
+  pricing). T15/T18 stay strict: with no listed CLI version a limit is a `provider_error`. Tested
+  with fake executables only; see "Unverified until the first real run".
+- CLI `worker run --provider codex|copilot|claude --task T --subtask S --agent-id ID --mode
   review|implement --worktree ABS [--model M] [--timeout S] [--commit SHA]
   [--verify-command C] [--live-branch B]... [--pass-env NAME]... [--execute]`: one managed
   headless worker attempt (T12; see "Managed workers" in
@@ -100,11 +112,21 @@ listed below is planned, not implemented.
 ## Not implemented
 
 Review-file parsing; message cleanup and
-bounded watches (formats.md section 7); Claude Code worker adapter; OS-level isolation of
+bounded watches (formats.md section 7); OS-level isolation of
 workers (filesystem/network); creating worktrees; verification and routing; VS Code
 integration.
 
-Unverified until the first real run: Copilot's matching of `shell(<verification command>)`,
+Unverified until the first real run (Claude, T24; each is a T25 check): that `claude -p` reads the
+prompt from stdin; that the `PowerShell` tool is available and that `PowerShell(git diff *)` and
+`PowerShell(<verification command>)` rules match the calls the model makes (the shell tool is the
+`shell_tool` field of the Claude profiles in `workers/claude.py`; flip it to `Bash`, with
+forward-slash verification commands, if PowerShell does not work); how `--restricted` and
+`--safe-mode` interact (a review run must be able to run the verification command and unable to
+edit); the JSON result field names (`result`, `is_error`, `session_id`, `usage`, `total_cost_usd`);
+`--session-id` plus `claude --resume <id>` from another process for an implement run; whether
+`CLAUDE_CODE_GIT_BASH_PATH` is needed; where subscription sign-in is stored (the profile
+directories are passed either way); and Claude's limit and permission-denied message wording (the
+detector patterns are synthetic). Unverified, earlier: Copilot's matching of `shell(<verification command>)`,
 prompt mode without `--allow-all-tools` when tools are used, Copilot's JSONL event schema
 (final message extraction is defensive) and `usage.json` fields; Codex's `--json` usage
 event shape (tokens are taken from any `usage` object with integer `*token*` fields).

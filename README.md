@@ -237,7 +237,7 @@ typed models, a parser and writer for the coordination files in
 SQLite index, and a small CLI. It needs Python 3.11+ and uses only the standard library at
 runtime. `notify` only sends when explicitly invoked with `--send`; without it, the command
 prints the intended transport and performs no external action. It can also launch one **managed
-headless worker** (`codex exec` or `copilot -p`) for a plan subtask with least-privilege
+headless worker** (`codex exec`, `copilot -p` or `claude -p`) for a plan subtask with least-privilege
 profiles, classify the outcome, and record status, review and attempt data; this has been tested
 with fake executables only. Routing, the registry and the VS Code integration are not
 implemented yet; see [docs/implementation-status.md](docs/implementation-status.md).
