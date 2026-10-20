@@ -196,6 +196,30 @@ manager writes (machine-only JSON, not part of the authoritative protocol files)
   reported, never deleted automatically.
 - Follow-up task, not part of T23: `worker run --mode implement` calls the manager's preflight.
 
+## D19. End-to-end job driver (T27): Accepted (coordinator), 2026-10-20
+
+`multi-agent-ai job` (`job.py`, `job_cli.py`) runs a whole plan by calling the existing modules. It is a
+dry run unless `--execute`. Rules fixed by the coordinator's answers to the design note
+(`tasks/m1-real-execution/notes/claude-d1-t27-design.md`, `claude-a7-t27-answers.md`):
+
+- `plan.md` is only read. Driver state is `<state-root>/jobs/<job-id>/events.jsonl` (append-only, the
+  source of truth) plus derived `job.json`, `report.json`, `report.md`; there is no driver status
+  file and no SQLite table in T27.
+- Dependants wait until their dependencies are integrated. Review is by a provider other than the
+  author's, or waived only by the plan. No class of failure is retried blindly: one table, `job.POLICY`.
+- There is no `job approve`: the driver prints the Git commands and the user merges. The integration
+  branch stays local. `--execute` needs `--verify-command` and `--approved-provider-run`, a speed bump
+  for agents and not a security control. Provider pool and models come from `--providers` / `--assign`.
+- Review files carry an orchestrator-written first header `status: agreed | changes requested | unparsed`
+  (Accepted, coordinator, Q12): strict exact-line parse of the reviewer's `verdict:` line, `unparsed` blocks
+  integration, formats.md section 9.
+- A dependency of a subtask that is not part of the job (its plan row is `done`/`merged`, or has `worktree: no`) counts as
+  satisfied, in the driver and in `workspace create`/`integrate` (`workspace.unmet_dependencies`). A subtask held back
+  because it overlaps another one forks from the integration tip once that one is integrated.
+- Known limits, not defects of the driver: a Copilot worker reached through the npm `.cmd` shim ends `invalid_arguments`
+  (the runner refuses awkward prompts through batch files, T12); independent subtasks are integrated in completion order
+  (the report says so); `append_event` re-reads the event file on every event (O(n^2), fine for the MVP, TODO).
+
 ## Open
 
 - **O2. Registry.** Implemented in `src/multi_agent_ai/registry.py` with the `registry` CLI and

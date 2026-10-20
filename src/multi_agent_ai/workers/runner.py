@@ -70,6 +70,10 @@ class WorkerRequest:
     verify_command: str | None = None
     max_budget_usd: float | None = None
     """Per-attempt spending cap; only the Claude adapter has one (off by default)."""
+    feedback: str | None = None
+    cancel: Any = None
+    """Optional ``threading.Event``: when set, the provider process tree is killed and the attempt ends ``cancelled``."""
+    """Correction-round text from the orchestrator (T27); capped and scrubbed by the prompt builder."""
 
 
 @dataclass
@@ -199,6 +203,19 @@ def _iso(moment: datetime | None) -> str | None:
 
 def _review_file(task_dir: Path, subtask_id: str, agent_id: str) -> Path:
     return task_dir / f"review-{subtask_id}-{agent_id}.md"
+
+
+REVIEW_VERDICT = re.compile(r"^\s*verdict:\s*(.*?)\s*$", re.I | re.M)
+
+
+def review_verdict(message: str) -> str:
+    """The reviewer's verdict from its final message: ``agreed``, ``changes requested`` or ``unparsed``.
+    Strict: the message must contain a line that is exactly ``verdict: agreed`` or ``verdict: changes
+    requested`` (case-insensitive, trimmed). No such line, a line with any other value, or two lines that
+    disagree give ``unparsed``, which never lets a commit through the integration gate. Nothing is
+    inferred from prose or the exit code. The verdict is the reviewer's claim, not independently verified."""
+    values = {m.group(1).lower() for m in REVIEW_VERDICT.finditer(message)}
+    return values.pop() if len(values) == 1 and values <= {"agreed", "changes requested"} else "unparsed"
 
 
 def write_review(path: Path, headers: list[tuple[str, str]], message: str, agent_id: str) -> None:
@@ -347,7 +364,7 @@ def run_worker(
     board = task_dir / "plan.md"
     prompt = build_prompt(plan=plan, subtask=subtask, agent_id=req.agent_id, provider=req.provider,
                           mode=req.mode, worktree=req.worktree, branch=info.branch, board_path=board,
-                          commit=commit)
+                          commit=commit, feedback=req.feedback)
     prompt_path = run.run_dir / "prompt.md"
     atomic_write(prompt_path, prompt)
     run.result["prompt_sha256"] = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
@@ -401,12 +418,12 @@ def run_worker(
     run.status("in progress", "none")
     result = winproc.run(command, invocation.args, cwd=req.worktree, env=child_env,
                          stdout_path=run.run_dir / "stdout.log", stderr_path=run.run_dir / "stderr.log",
-                         stdin_path=invocation.stdin_path, timeout=req.timeout)
+                         stdin_path=invocation.stdin_path, timeout=req.timeout, cancel=req.cancel)
     run.result.update(exit_code=result.exit_code, timed_out=result.timed_out,
                       duration_seconds=result.duration_seconds, pid=result.pid,
                       tree_control=result.tree_control, kill_method=result.kill_method)
     run.result["findings"].extend(result.notes)
-    evidence.update(exit_code=result.exit_code, timed_out=result.timed_out)
+    evidence.update(exit_code=result.exit_code, timed_out=result.timed_out, cancelled=result.cancelled)
     if result.launch_error:
         evidence["launch_error"] = True
         return finish(result.launch_error)
@@ -550,7 +567,8 @@ def preview_worker(
             problems.append(f"commit to review not found: {exc}")
     prompt = build_prompt(plan=plan, subtask=subtask, agent_id=req.agent_id, provider=req.provider,
                           mode=req.mode, worktree=req.worktree, branch=info.branch,
-                          board_path=req.state_root.tasks / req.task_id / "plan.md", commit=commit)
+                          board_path=req.state_root.tasks / req.task_id / "plan.md", commit=commit,
+                          feedback=req.feedback)
     preview["prompt_sha256"] = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     preview["verify_command"] = verify
     # the paths below are never created in a dry run; adapters only build argv from them
@@ -685,12 +703,13 @@ def _finish(run: _Run, evidence: dict[str, Any], detail: str | None, message: st
     if failure is None and req.mode == "review" and message is not None and run.plan is not None:
         review_path = _review_file(run.task_dir, req.subtask_id, req.agent_id)
         write_review(review_path, [
+            ("status", review_verdict(message)),
             ("subtask", req.subtask_id), ("agent", req.agent_id), ("provider", req.provider),
             ("model", req.model or "provider default (not specified)"),
             ("commit", run.result["git"].get("commit_reviewed", "unknown")), ("attempt", run.attempt_id),
             ("profile", run.result["profile"] or "-"), ("exit-code", str(run.result["exit_code"])),
             ("plan-revision", str(run.plan.revision)), ("updated", format_timestamp()),
-            ("provenance", "header written by the orchestrator; the body is the worker's final message, verbatim"),
+            ("provenance", "headers written by the orchestrator (status is parsed from the verdict line of the body); the body is the worker's final message, verbatim"),
         ], message, req.agent_id)
     state = "review" if failure is None else "blocked"
     blockers = "none" if failure is None else f"{failure}: {detail or ''}"

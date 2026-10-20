@@ -218,6 +218,7 @@ def test_codex_review_success_end_to_end(env):
     assert doc.headers["commit"] == env.base and doc.headers["attempt"] == outcome.attempt_id
     assert doc.headers["profile"] == "codex-review" and doc.headers["exit-code"] == "0"
     assert doc.headers["plan-revision"] == "3"
+    assert doc.headers["status"] == "agreed"  # parsed by the orchestrator from the verdict line (Q12)
 
     status = read_statuses(task_dir(env))["codex-w1"]
     assert status.ok, status.errors
@@ -556,6 +557,17 @@ def test_timeout_kills_and_classifies(env):
     outcome = env.run(timeout=2)
     assert outcome.failure_class == fc.TIMEOUT and outcome.result["timed_out"]
     assert outcome.result["kill_method"] == "job-object"
+
+
+def test_cancel_event_ends_the_attempt_as_cancelled_not_timeout(env):
+    import threading
+    env.install("codex")
+    env.configure(stdout=CODEX_OK, final="late", sleep=60)
+    cancel = threading.Event()
+    threading.Timer(2.0, cancel.set).start()
+    outcome = env.run(timeout=60, cancel=cancel)
+    assert outcome.failure_class == fc.CANCELLED and not outcome.result["timed_out"]
+    assert outcome.result["kill_method"] == "job-object" and outcome.review_path is None
 
 
 @pytest.mark.parametrize("stderr, expected", [

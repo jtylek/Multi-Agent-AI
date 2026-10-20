@@ -33,6 +33,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -329,6 +330,29 @@ class RunResult:
     """``job-object``, ``taskkill`` (fallback) or ``none`` (launch failed)."""
     kill_method: str | None = None
     notes: list[str] = field(default_factory=list)
+    cancelled: bool = False
+    """The caller's cancel event was set and the process tree was killed."""
+
+
+CANCEL_POLL_SECONDS = 0.1
+
+
+def _wait(proc: subprocess.Popen, timeout: float | None, cancel: threading.Event | None, result: RunResult) -> int | None:
+    """``proc.wait(timeout)``, also returning when ``cancel`` is set (then ``result.cancelled`` is True and
+    the caller's kill path runs). Raises :class:`subprocess.TimeoutExpired` like ``proc.wait``."""
+    if cancel is None:
+        return proc.wait(timeout=timeout)
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while True:
+        if cancel.is_set():
+            result.cancelled = True
+            raise subprocess.TimeoutExpired(proc.args, timeout or 0)
+        step = CANCEL_POLL_SECONDS if deadline is None else max(0.0, min(CANCEL_POLL_SECONDS, deadline - time.monotonic()))
+        try:
+            return proc.wait(timeout=step)
+        except subprocess.TimeoutExpired:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise
 
 
 def run(
@@ -341,9 +365,11 @@ def run(
     stderr_path: Path,
     stdin_path: Path | None = None,
     timeout: float | None = None,
+    cancel: threading.Event | None = None,
 ) -> RunResult:
     """Run ``command args`` without a shell, streaming output to files; kill the whole process
-    tree on timeout. Never retries. Launch failures are returned, not raised."""
+    tree on timeout, or as soon as ``cancel`` (optional) is set. Never retries. Launch failures are
+    returned, not raised. Without ``cancel`` the behaviour is exactly as before."""
     started = datetime.now()
     clock = time.monotonic()
     creationflags = 0
@@ -378,9 +404,9 @@ def run(
         tree_control = "job-object" if job.assign(proc.pid) else "taskkill"
         result = RunResult(None, False, started, started, 0.0, pid=proc.pid, tree_control=tree_control)
         try:
-            result.exit_code = proc.wait(timeout=timeout)
+            result.exit_code = _wait(proc, timeout, cancel, result)
         except subprocess.TimeoutExpired:
-            result.timed_out = True
+            result.timed_out = not result.cancelled
             if tree_control == "job-object" and job.terminate():
                 result.kill_method = "job-object"
             else:

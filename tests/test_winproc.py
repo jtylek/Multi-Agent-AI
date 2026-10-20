@@ -178,6 +178,39 @@ def test_timeout_kills_the_whole_process_tree(tmp_path):
     assert not winproc.process_alive(result.pid)
 
 
+def test_cancel_event_kills_the_whole_process_tree_and_is_not_a_timeout(tmp_path):
+    import threading
+    script = touch(tmp_path / "tree.py", TREE)
+    pid_file = tmp_path / "grandchild.pid"
+    cancel = threading.Event()
+    threading.Timer(1.5, cancel.set).start()
+    started = time.monotonic()
+    result = winproc.run(py(tmp_path), [str(script), str(pid_file), "sleep"], cwd=tmp_path, env=build_env(),
+                         stdout_path=tmp_path / "1.log", stderr_path=tmp_path / "2.log", timeout=60, cancel=cancel)
+    assert result.cancelled and not result.timed_out and result.kill_method == "job-object"
+    assert time.monotonic() - started < 30
+    assert wait_dead(int(pid_file.read_text())) and not winproc.process_alive(result.pid)
+
+
+def test_cancel_event_not_set_changes_nothing(tmp_path):
+    import threading
+    script = touch(tmp_path / "tree.py", TREE)
+    pid_file = tmp_path / "grandchild.pid"
+    result = winproc.run(py(tmp_path), [str(script), str(pid_file), "exit"], cwd=tmp_path, env=build_env(),
+                         stdout_path=tmp_path / "1.log", stderr_path=tmp_path / "2.log", timeout=60,
+                         cancel=threading.Event())
+    assert result.exit_code == 0 and not result.cancelled and not result.timed_out
+
+
+def test_timeout_still_wins_when_cancel_is_given_but_never_set(tmp_path):
+    import threading
+    script = touch(tmp_path / "tree.py", TREE)
+    result = winproc.run(py(tmp_path), [str(script), str(tmp_path / "g.pid"), "sleep"], cwd=tmp_path, env=build_env(),
+                         stdout_path=tmp_path / "1.log", stderr_path=tmp_path / "2.log", timeout=2,
+                         cancel=threading.Event())
+    assert result.timed_out and not result.cancelled and result.kill_method == "job-object"
+
+
 def test_descendants_do_not_outlive_a_normal_exit(tmp_path):
     script = touch(tmp_path / "tree.py", TREE)
     pid_file = tmp_path / "grandchild.pid"

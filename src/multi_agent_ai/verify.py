@@ -17,7 +17,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from . import winproc
 
@@ -110,6 +110,7 @@ def _execute(
     index: int,
     default_timeout: float,
     preflight: bool = False,
+    cancel: Any = None,
 ) -> CommandResult:
     stdout = run_dir / f"{index:03d}-stdout.log"
     stderr = run_dir / f"{index:03d}-stderr.log"
@@ -121,9 +122,11 @@ def _execute(
         return CommandResult(list(spec.argv), "environment_error", None, 0.0, str(stdout), str(stderr), error=str(exc), preflight=preflight)
     result = winproc.run(
         command, spec.argv[1:], cwd=cwd, env=env, stdout_path=stdout, stderr_path=stderr,
-        timeout=spec.timeout if spec.timeout is not None else default_timeout,
+        timeout=spec.timeout if spec.timeout is not None else default_timeout, cancel=cancel,
     )
-    if result.launch_error:
+    if result.cancelled:
+        status = "cancelled"
+    elif result.launch_error:
         status = "environment_error"
     elif result.timed_out or result.exit_code != 0:
         status = "failed"
@@ -194,6 +197,7 @@ def verify(
     *,
     run_dir: Path | str | None = None,
     environment: Mapping[str, str] | None = None,
+    cancel: Any = None,
 ) -> VerificationResult:
     """Run *spec* in *worktree* and return durable structured evidence.
 
@@ -219,7 +223,7 @@ def verify(
     elif result.error is None:
         for command in spec.preflight:
             item = _execute(_command(command), cwd=cwd, env=env, run_dir=directory, index=index,
-                            default_timeout=spec.timeout, preflight=True)
+                            default_timeout=spec.timeout, preflight=True, cancel=cancel)
             index += 1
             result.commands.append(item)
             if item.status != "passed":
@@ -228,11 +232,12 @@ def verify(
         if result.error is None:
             for command in spec.commands:
                 item = _execute(_command(command), cwd=cwd, env=env, run_dir=directory, index=index,
-                                default_timeout=spec.timeout)
+                                default_timeout=spec.timeout, cancel=cancel)
                 index += 1
                 result.commands.append(item)
                 if item.status != "passed":
-                    result.status = ENVIRONMENT_ERROR if item.status == ENVIRONMENT_ERROR else VERIFICATION_FAILED
+                    result.status = (ENVIRONMENT_ERROR if item.status == ENVIRONMENT_ERROR else
+                                     "cancelled" if item.status == "cancelled" else VERIFICATION_FAILED)
                     result.error = item.error or "verification command failed"
                     break
 

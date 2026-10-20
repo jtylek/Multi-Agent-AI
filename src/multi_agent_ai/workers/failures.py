@@ -27,11 +27,12 @@ COMMIT_FAILED = "commit_failed"
 QUOTA_EXHAUSTED = "quota_exhausted"
 CAP_REACHED = "cap_reached"
 PROVIDER_ERROR = "provider_error"
+CANCELLED = "cancelled"
 
 FAILURE_CLASSES = (
     PROFILE_UNCONFIGURED, ENVIRONMENT, LAUNCH_ERROR, REVIEW_MODIFIED_FILES, GIT_POLICY_VIOLATION,
     TIMEOUT, UNSUPPORTED_MODEL, AUTH, PERMISSION_DENIED, INVALID_ARGUMENTS, NONZERO_EXIT,
-    MALFORMED_OUTPUT, NO_CHANGES, COMMIT_FAILED, QUOTA_EXHAUSTED, CAP_REACHED, PROVIDER_ERROR,
+    MALFORMED_OUTPUT, NO_CHANGES, COMMIT_FAILED, QUOTA_EXHAUSTED, CAP_REACHED, PROVIDER_ERROR, CANCELLED,
 )
 """In precedence order: the first that applies is the primary class."""
 
@@ -69,6 +70,8 @@ class Evidence:
     arguments_rejected: bool = False
     """Refused before launch: argv too long, or not passable through cmd.exe unaltered."""
     timed_out: bool = False
+    cancelled: bool = False
+    """The orchestrator cancelled the run (T27 cancel event); not a provider or worker failure."""
     review_modified: bool = False
     git_violation: bool = False
     malformed: bool = False
@@ -108,6 +111,8 @@ def classify(e: Evidence) -> str | None:
         return REVIEW_MODIFIED_FILES
     if e.git_violation:
         return GIT_POLICY_VIOLATION
+    if e.cancelled:
+        return CANCELLED
     if e.timed_out:
         return TIMEOUT
     if e.exit_code != 0:
