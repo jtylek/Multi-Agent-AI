@@ -559,6 +559,17 @@ def test_timeout_kills_and_classifies(env):
     assert outcome.result["kill_method"] == "job-object"
 
 
+def test_cancel_event_ends_the_attempt_as_cancelled_not_timeout(env):
+    import threading
+    env.install("codex")
+    env.configure(stdout=CODEX_OK, final="late", sleep=60)
+    cancel = threading.Event()
+    threading.Timer(2.0, cancel.set).start()
+    outcome = env.run(timeout=60, cancel=cancel)
+    assert outcome.failure_class == fc.CANCELLED and not outcome.result["timed_out"]
+    assert outcome.result["kill_method"] == "job-object" and outcome.review_path is None
+
+
 @pytest.mark.parametrize("stderr, expected", [
     ("error: unexpected argument '--bogus' found\n", fc.INVALID_ARGUMENTS),
     ("Error: model 'nope' is not supported\n", fc.UNSUPPORTED_MODEL),

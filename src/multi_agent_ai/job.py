@@ -67,6 +67,7 @@ RETRY_ONCE = "retry_once"
 FEEDBACK_ONCE = "feedback_once"
 REREVIEW_ONCE = "rereview_once"
 FAIL = "fail"
+CANCEL = "cancel"
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,7 @@ POLICY: dict[str, Policy] = {
     F.COMMIT_FAILED: Policy(FAIL, "the orchestrator's commit failed: evidence kept, no retry"),
     F.NONZERO_EXIT: Policy(FAIL, "the worker exited nonzero: evidence kept, no retry"),
     F.PROVIDER_ERROR: Policy(FAIL, "provider error: evidence kept, no retry"),
+    F.CANCELLED: Policy(CANCEL, "the job was cancelled: running attempts were killed, nothing is retried"),
     F.REVIEW_MODIFIED_FILES: Policy(REREVIEW_ONCE, "the reviewer changed files: discard, one re-review by another provider"),
     "verification_failed": Policy(FEEDBACK_ONCE, "verification failed: one correction round with the output tail"),
     "environment_error": Policy(PAUSE_USER, "verification environment failed: fix the environment; no retry"),

@@ -249,6 +249,8 @@ CASES = [
     (dict(review_modified=True, timed_out=True), fc.REVIEW_MODIFIED_FILES),
     (dict(git_violation=True, exit_code=0, mode="implement", changed_files=1), fc.GIT_POLICY_VIOLATION),
     (dict(timed_out=True, exit_code=1), fc.TIMEOUT),
+    (dict(cancelled=True, timed_out=False, exit_code=1), fc.CANCELLED),
+    (dict(cancelled=True, timed_out=True, exit_code=1), fc.CANCELLED),
     (dict(exit_code=1, stderr="Error: model 'gpt-x' is not supported"), fc.UNSUPPORTED_MODEL),
     (dict(exit_code=1, stderr="You do not have access to model o9"), fc.UNSUPPORTED_MODEL),
     (dict(exit_code=1, stderr="401 Unauthorized"), fc.AUTH),

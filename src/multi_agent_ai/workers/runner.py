@@ -71,6 +71,8 @@ class WorkerRequest:
     max_budget_usd: float | None = None
     """Per-attempt spending cap; only the Claude adapter has one (off by default)."""
     feedback: str | None = None
+    cancel: Any = None
+    """Optional ``threading.Event``: when set, the provider process tree is killed and the attempt ends ``cancelled``."""
     """Correction-round text from the orchestrator (T27); capped and scrubbed by the prompt builder."""
 
 
@@ -408,12 +410,12 @@ def run_worker(
     run.status("in progress", "none")
     result = winproc.run(command, invocation.args, cwd=req.worktree, env=child_env,
                          stdout_path=run.run_dir / "stdout.log", stderr_path=run.run_dir / "stderr.log",
-                         stdin_path=invocation.stdin_path, timeout=req.timeout)
+                         stdin_path=invocation.stdin_path, timeout=req.timeout, cancel=req.cancel)
     run.result.update(exit_code=result.exit_code, timed_out=result.timed_out,
                       duration_seconds=result.duration_seconds, pid=result.pid,
                       tree_control=result.tree_control, kill_method=result.kill_method)
     run.result["findings"].extend(result.notes)
-    evidence.update(exit_code=result.exit_code, timed_out=result.timed_out)
+    evidence.update(exit_code=result.exit_code, timed_out=result.timed_out, cancelled=result.cancelled)
     if result.launch_error:
         evidence["launch_error"] = True
         return finish(result.launch_error)
