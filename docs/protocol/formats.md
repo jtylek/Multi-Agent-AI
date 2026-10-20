@@ -224,7 +224,13 @@ must equal `agent`.
 | `tests` | yes | scoped tests and results, or `none run` |
 | `blockers` | yes | text or `none` |
 | `contact` | no | how other agents can notify this agent: `codex queue --thread <uuid-or-name>`, `code chat`, `claude SendMessage <session-name>`, or `user prompt`. The value must not start with `-`. Until the registry exists this is where `multi-agent-ai notify` reads it; a registry `contact:` takes precedence later. |
+| `safe-to-clear` | no | `yes` or `no`. `yes` means the agent has no uncommitted or unsaved work, its state and next steps are recorded in files (this status file, its notes, its branch), and a fresh session could resume from the resume brief and this file. The user can then clear the agent's context window without loss. Absent means `no`. |
 | `updated` | yes | timestamp (minute precision) |
+
+`safe-to-clear` is the agent's own claim, not proof, and only counts while the status is current:
+set it back to `no` as soon as work starts again, and ignore it when `updated` is older than the
+file's own staleness limit. The coordinator tells the user which agents are safe to clear; nothing
+clears a session automatically.
 
 Staleness (two independent checks):
 

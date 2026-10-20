@@ -17,7 +17,10 @@ state, which is not tracked by Git) may add rules for that task but may not rela
    coordination state of a task you are not part of.
 3. **Clock.** Take every timestamp from the system clock, in local time as
    `YYYY-MM-DD HH:MM` (`Get-Date -Format "yyyy-MM-dd HH:mm"` in PowerShell). Never estimate one.
-   Update your status file on every state change and quote the plan revision you read.
+   Update your status file on every state change and quote the plan revision you read. When you
+   have finished or parked your work (everything committed, next steps written down), add
+   `safe-to-clear: yes` to your status file so the user can clear your context window without loss;
+   set it to `no` when you start working again.
 4. **No real delivery, no real limits.** Do not run anything that can reach a real session or use
    provider quota (`notify --send`, `codex queue`, `code chat`, Claude relays, `worker run
    --execute`, anything that could hit a usage limit) unless the coordinator or the user explicitly
