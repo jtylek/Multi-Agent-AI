@@ -370,3 +370,39 @@ def test_crash_during_a_review_is_retained_and_the_leftover_worktree_is_removed(
     assert not list(world.wt_root.glob("My Project-A-review*"))
     final = resume(world, retry=("A",))
     assert final.state == "awaiting_approval", (final.state, final.reason)
+
+
+def test_retry_reopens_only_the_dependants_of_the_retried_subtask(tmp_path):
+    from multi_agent_ai.models import Subtask
+    rows = (Subtask("A", "chain 1 start", "a/", (), True, "codex-1", "waived", "open"),
+            Subtask("A2", "chain 1 next", "a2/", ("A",), True, "codex-1", "waived", "open"),
+            Subtask("A3", "chain 1 end", "a3/", ("A2",), True, "codex-1", "waived", "open"),
+            Subtask("B", "chain 2 start", "b/", (), True, "copilot-1", "waived", "open"),
+            Subtask("B2", "chain 2 next", "b2/", ("B",), True, "copilot-1", "waived", "open"))
+    w = World(tmp_path, rows=rows)
+    w.put_plan(rows, 3)
+    import re
+    text = (w.state.tasks / TASK / "plan.md").read_text(encoding="utf-8")
+    verify = "".join(f"verify: {sid}: `python -m pytest -q`\n" for sid in ("A", "A2", "A3", "B", "B2"))
+    (w.state.tasks / TASK / "plan.md").write_text(re.sub(r"verify: .*\n", "", text) + "\n" + verify, encoding="utf-8")
+    w.script[("A", "implement", 1)] = F.NO_CHANGES
+    w.script[("A", "implement", 2)] = F.NO_CHANGES  # chain 1 fails at its start
+    w.script[("B", "implement", 1)] = F.NO_CHANGES
+    w.script[("B", "implement", 2)] = F.NO_CHANGES  # chain 2 fails at its start
+    job = start(w)
+    assert {s: job.subtasks[s].state for s in rows_ids(rows)} == {
+        "A": "failed", "A2": "blocked_by", "A3": "blocked_by", "B": "failed", "B2": "blocked_by"}
+    w.script.clear()
+    events_before, _ = jb.read_events(jb.job_dir(w.state, JOB) / jb.EVENTS_FILE)
+    final = resume(w, retry=("A",))
+    assert final.subtasks["A"].state == "integrated" and final.subtasks["A2"].state == "integrated"
+    assert final.subtasks["A3"].state == "integrated"  # transitive dependant reopened and run
+    assert final.subtasks["B"].state == "failed" and final.subtasks["B2"].state == "blocked_by"
+    events, _ = jb.read_events(jb.job_dir(w.state, JOB) / jb.EVENTS_FILE)
+    new = events[len(events_before):]
+    assert not [e for e in new if e["kind"] == "subtask_state" and e["subtask"] in ("B", "B2")]  # no transition at all
+    assert not w.launches_of("B", "implement")[2:]  # chain 2 was not run again
+
+
+def rows_ids(rows):
+    return [r.id for r in rows]

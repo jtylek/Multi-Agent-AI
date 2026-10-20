@@ -724,7 +724,8 @@ def find_result(state: StateRoot, agent: str) -> dict[str, Any] | None:
     return None
 
 
-def reconcile(state: StateRoot, rec: Recorder, retry: tuple[str, ...] = ()) -> dict[str, str]:
+def reconcile(state: StateRoot, rec: Recorder, retry: tuple[str, ...] = (),
+              depends_on: Mapping[str, tuple[str, ...]] | None = None) -> dict[str, str]:
     """Bring a job whose driver stopped back to a consistent state without launching anything.
 
     Every attempt with a start event and no finish event is closed from the runner's ``result.json`` (reconciled)
@@ -776,9 +777,19 @@ def reconcile(state: StateRoot, rec: Recorder, retry: tuple[str, ...] = ()) -> d
             start_at[sid] = "integrate"
         else:  # verification_failed / changes_requested: the correction was lost with the driver
             rec.emit("subtask_state", subtask=sid, state="failed", reason=f"stale: stopped in {sub.state}")
-    for sid, sub in job.subtasks.items():  # dependants of retried subtasks may run again
-        if sub.state == "blocked_by" and retry:
-            rec.emit("subtask_state", subtask=sid, state="pending", reason="its dependency was retried")
+    # Only the dependants (direct or through other dependants) of a retried subtask may run again; a subtask blocked by
+    # something that was not retried stays blocked_by and no event is written for it.
+    reopened = set(retry)
+    grew = bool(retry and depends_on)
+    while grew:
+        grew = False
+        for sid, deps in (depends_on or {}).items():
+            if sid not in reopened and any(d in reopened for d in deps):
+                reopened.add(sid)
+                grew = True
+    for sid in job.subtasks:
+        if sid not in retry and sid in reopened and job.subtasks[sid].state == "blocked_by":
+            rec.emit("subtask_state", subtask=sid, state="pending", reason="a dependency was retried")
     return start_at
 
 
@@ -851,7 +862,7 @@ def resume_job(state: StateRoot, project_root: Path, job_id: str, *, retry: tupl
                 return engine._rest("paused_user", "the plan has problems: " + "; ".join(plan.problems))
             engine.rec.emit("job_resumed", retry=list(retry), previous_state=job.state)
             engine.cleanup_review_worktrees()
-            engine.start_at = reconcile(state, engine.rec, retry)
+            engine.start_at = reconcile(state, engine.rec, retry, {s.id: tuple(s.depends_on) for s in plan.subtasks})
             return engine.run()
     finally:
         lock.release()
