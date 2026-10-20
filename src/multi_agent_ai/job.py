@@ -502,6 +502,8 @@ def apply_event(job: JobState | None, e: Mapping[str, Any]) -> JobState | None:
             if record.get("attempt") == e["attempt"]:
                 record.update({k: v for k, v in e.items() if k not in ("seq", "kind", "at")})
                 record["finished"] = True
+    elif kind == "plan_revision_accepted":
+        job.plan_revision = e["revision"]
     elif kind == "integration":
         job.integration = {k: v for k, v in e.items() if k not in ("seq", "kind")}
     elif kind == "final_check":

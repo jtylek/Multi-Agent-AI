@@ -10,18 +10,23 @@ lock. The driver never merges into the user's branch, never pushes, and never ed
 
 from __future__ import annotations
 
+import json
+import os
 import threading
+import time
 from collections.abc import Callable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from . import job as jb
 from . import verify as verify_mod
+from . import winproc
 from . import workspace as ws
 from .board import read_plan
-from .document import DocumentError, read_document
+from .document import DocumentError, atomic_write, read_document
 from .state import StateRoot
 from .workers import failures as F
 from .workers import gitops
@@ -33,6 +38,11 @@ USAGE_ERROR = "usage_error"
 DRIVER_ERROR = "driver_error"
 REVIEW_UNPARSED = "review_unparsed"
 OK, FAILED, HALT = "ok", "failed", "halt"
+CANCEL_MARKER = "cancel.requested"
+LOCK_FILE = "driver.lock"
+HEARTBEAT_SECONDS = 30.0
+STALE_LOCK_SECONDS = 600.0
+STALE = "stale"
 
 
 @dataclass
@@ -111,6 +121,10 @@ class Engine:
         self.paths: dict[str, Path] = {}
         self.semaphores = {p: threading.Semaphore(options.max_per_provider) for p in options.providers}
         self.cancel = threading.Event()
+        self.start_at: dict[str, str] = {}
+        """Resume points: subtask -> ``verify`` or ``integrate`` (everything else starts at implement)."""
+        self.lock: DriverLock | None = None
+        self._beat = 0.0
 
     # --- the loop (driver thread) -------------------------------------------------------------
 
@@ -121,18 +135,30 @@ class Engine:
                                   self.protected, execute=True)
         except ws.WorkspaceError as exc:
             return self._rest("paused_user", f"integration branch: {exc.code}: {exc.message}")
+        records = ws.read_records(self.state, self.plan.task_id)
+        for sid in self.planned:
+            if self.job.subtasks[sid].state not in ("pending", "blocked_by") and sid in records:
+                self.paths[sid] = Path(records[sid].path)
         self.rec.emit("job_state", state="running")
         halt: tuple[str, str] | None = None
         pending = [sid for sid in self.planned if self.job.subtasks[sid].state == "pending"]
+        resumed = [sid for sid in self.planned if sid in self.start_at]
         running: dict[Future, str] = {}
         with ThreadPoolExecutor(max_workers=self.options.max_parallel, thread_name_prefix="job") as pool:
+            for sid in resumed:  # reconciled subtasks continue where they stopped
+                running[pool.submit(self._pipeline, sid)] = sid
             while True:
-                halt = halt or self._plan_changed() or self._cancelled()
+                self._heartbeat()
+                halt = halt or self._cancelled() or self._plan_changed()
                 if halt is None:
                     halt = self._start_ready(pending, running, pool)
                 if not running:
                     break
-                done, _ = wait(running, timeout=self.hooks.poll_seconds, return_when=FIRST_COMPLETED)
+                try:
+                    done, _ = wait(running, timeout=self.hooks.poll_seconds, return_when=FIRST_COMPLETED)
+                except KeyboardInterrupt:  # Ctrl+C in a foreground driver = cancel; attempts are killed, evidence kept
+                    self.cancel.set()
+                    continue
                 for future in done:
                     sid = running.pop(future)
                     try:
@@ -141,6 +167,11 @@ class Engine:
                         result = SubtaskResult(HALT, DRIVER_ERROR, f"{type(exc).__name__}: {exc}")
                     halt = self._finish_subtask(sid, result) or halt
         return self._conclude(halt)
+
+    def _heartbeat(self) -> None:
+        if self.lock is not None and time.monotonic() - self._beat >= HEARTBEAT_SECONDS:
+            self.lock.beat()
+            self._beat = time.monotonic()
 
     def _plan_changed(self) -> tuple[str, str] | None:
         parsed = read_plan(self.state.tasks / self.plan.task_id)
@@ -151,6 +182,8 @@ class Engine:
         return None
 
     def _cancelled(self) -> tuple[str, str] | None:
+        if (self.rec.dir / CANCEL_MARKER).exists():
+            self.cancel.set()
         return ("cancelled", "cancel requested") if self.cancel.is_set() else None
 
     def _start_ready(self, pending: list[str], running: dict[Future, str], pool: ThreadPoolExecutor) -> tuple[str, str] | None:
@@ -184,6 +217,9 @@ class Engine:
         return None
 
     def _finish_subtask(self, sid: str, result: SubtaskResult) -> tuple[str, str] | None:
+        if result.failure_class == F.CANCELLED:
+            self.rec.emit("subtask_state", subtask=sid, state="cancelled", reason="cancel requested")
+            return "cancelled", "cancel requested"
         if result.status == OK:
             report = ws.integrate(self.project, self.state, self.plan.task_id, [sid], self.protected, execute=True)
             item = report.items[0]
@@ -231,6 +267,7 @@ class Engine:
         return self._rest("awaiting_approval", None)
 
     def _rest(self, state: str, reason: str | None) -> jb.JobState:
+        state = state if state in jb.JOB_STATES else "paused_user"
         self.rec.emit("job_state", state=state, reason=reason)
         self.rec.report()
         return self.job
@@ -240,53 +277,62 @@ class Engine:
     def _pipeline(self, sid: str) -> SubtaskResult:
         plan, path = self.planned[sid], self.paths[sid]
         feedback: str | None = None
+        stage = self.start_at.pop(sid, "implement")
+        tip = self.job.subtasks[sid].commit if stage != "implement" else None
         while True:
-            try:
-                ws.preflight_for_execution(self.project, self.state, self.plan.task_id, sid, self.protected)
-            except ws.WorkspaceError as exc:
-                return SubtaskResult(HALT, exc.code, exc.message)
-            self.rec.emit("subtask_state", subtask=sid, state="implementing")
-            out = self._attempt(sid, "implement", plan.author_provider, plan.model, path, feedback=feedback)
-            if out.failure_class:
-                cause = out.failure_class
-                policy = jb.policy_for(cause)
-                if policy.action == jb.RETRY_ONCE and self._clean(path) and self.rec.spend(sid, cause):
-                    feedback = CLARIFY if cause in (F.NO_CHANGES, F.MALFORMED_OUTPUT) else None
+            if self.cancel.is_set():
+                return SubtaskResult(HALT, F.CANCELLED, "cancel requested", halt_state="cancelled")
+            if stage == "implement":
+                try:
+                    ws.preflight_for_execution(self.project, self.state, self.plan.task_id, sid, self.protected)
+                except ws.WorkspaceError as exc:
+                    return SubtaskResult(HALT, exc.code, exc.message)
+                self.rec.emit("subtask_state", subtask=sid, state="implementing")
+                out = self._attempt(sid, "implement", plan.author_provider, plan.model, path, feedback=feedback)
+                if out.failure_class:
+                    cause = out.failure_class
+                    policy = jb.policy_for(cause)
+                    if policy.action == jb.RETRY_ONCE and self._clean(path) and self.rec.spend(sid, cause):
+                        feedback = CLARIFY if cause in (F.NO_CHANGES, F.MALFORMED_OUTPUT) else None
+                        continue
+                    return self._terminal(cause, policy, out.detail)
+                tip = out.commit or gitops.git(path, "rev-parse", "HEAD").strip()
+                self.rec.emit("subtask_state", subtask=sid, state="implemented", commit=tip)
+                stage = "verify"
+            if stage == "verify":
+                verification = self._verify(sid, path, tip)
+                if verification is not None:
+                    cause, text = verification
+                    policy = jb.policy_for(cause)
+                    if policy.action == jb.FEEDBACK_ONCE and self.rec.spend(sid, cause):
+                        feedback, stage = text, "implement"
+                        continue
+                    return self._terminal(cause, policy, text[-300:])
+                self.rec.emit("subtask_state", subtask=sid, state="verified", commit=tip)
+                if plan.review == "waived":
+                    self.rec.emit("subtask_state", subtask=sid, state="reviewed", commit=tip, detail={"review": "waived"})
+                    return SubtaskResult(OK, tip=tip)
+                stage = "review"
+            if stage == "review":
+                review = self._review(sid, tip)
+                if review.kind == "agreed":
+                    self.rec.emit("subtask_state", subtask=sid, state="reviewed", commit=tip, detail={"review": "agreed"})
+                    return SubtaskResult(OK, tip=tip)
+                if review.kind == "failed":
+                    cause = review.failure_class or REVIEW_UNPARSED
+                    return self._terminal(cause, jb.policy_for(cause), review.reason)
+                self.rec.emit("subtask_state", subtask=sid, state="changes_requested",
+                              reason="the reviewer asked for changes")
+                if self.rec.spend(sid, "changes_requested"):
+                    feedback, stage = review.text, "implement"
                     continue
-                return self._terminal(cause, policy, self._detail(out))
-            tip = out.commit or gitops.git(path, "rev-parse", "HEAD").strip()
-            self.rec.emit("subtask_state", subtask=sid, state="implemented", commit=tip)
-
-            verification = self._verify(sid, path, tip)
-            if verification is not None:
-                cause, text = verification
-                policy = jb.policy_for(cause)
-                if policy.action == jb.FEEDBACK_ONCE and self.rec.spend(sid, cause):
-                    feedback = text
-                    continue
-                return self._terminal(cause, policy, text[-300:])
-            self.rec.emit("subtask_state", subtask=sid, state="verified", commit=tip)
-
-            if plan.review == "waived":
-                self.rec.emit("subtask_state", subtask=sid, state="reviewed", commit=tip,
-                              detail={"review": "waived"})
-                return SubtaskResult(OK, tip=tip)
-            review = self._review(sid, tip)
-            if review.kind == "agreed":
-                self.rec.emit("subtask_state", subtask=sid, state="reviewed", commit=tip, detail={"review": "agreed"})
-                return SubtaskResult(OK, tip=tip)
-            if review.kind == "failed":
-                return self._terminal(review.failure_class or REVIEW_UNPARSED, jb.policy_for(review.failure_class or REVIEW_UNPARSED),
-                                      review.reason)
-            self.rec.emit("subtask_state", subtask=sid, state="changes_requested", reason="the reviewer asked for changes")
-            policy = jb.policy_for("changes_requested")
-            if self.rec.spend(sid, "changes_requested"):
-                feedback = review.text
-                continue
-            return SubtaskResult(HALT, "changes_requested", "second review also asked for changes: " + review.text[:200])
+                return SubtaskResult(HALT, "changes_requested", "second review also asked for changes: " + review.text[:200])
+            return SubtaskResult(OK, tip=tip)  # stage == "integrate": reviewed before the driver stopped
 
     def _terminal(self, cause: str, policy: jb.Policy, detail: str) -> SubtaskResult:
         reason = f"{policy.reason}. {detail}".strip()
+        if policy.action == jb.CANCEL:
+            return SubtaskResult(HALT, F.CANCELLED, reason, halt_state="cancelled")
         if policy.action in (jb.STOP_JOB, jb.PAUSE_USER):
             return SubtaskResult(HALT, cause, reason)
         return SubtaskResult(FAILED, cause, reason)
@@ -314,7 +360,7 @@ class Engine:
             mode="review" if role == "review" else "implement", worktree=worktree, project_root=self.project,
             state_root=self.state, model=model, timeout=timeout, commit=commit,
             live_branches=tuple(self.options.live_branches), pass_env=tuple(self.options.pass_env),
-            verify_command=self.planned[sid].verify_command, feedback=feedback)
+            verify_command=self.planned[sid].verify_command, feedback=feedback, cancel=self.cancel)
         outcome: WorkerOutcome | None = None
         failure, detail = None, ""
         with self.semaphores[provider]:
@@ -402,7 +448,7 @@ class Engine:
             if out.failure_class:
                 return ReviewResult("failed", out.failure_class, reason=out.detail)
             review_path = out.outcome.review_path if out.outcome else None
-            status, commit = ws._review_commit(review_path) if review_path else (None, None)
+            status, commit = ws._review_commit(review_path) if review_path else (None, None)  # T23's private helper; becomes public later
             if status == "agreed" and commit and tip.startswith(commit[:7]) or status == "agreed" and commit and commit.startswith(tip[:7]):
                 return ReviewResult("agreed")
             if status == "changes requested":
@@ -444,15 +490,255 @@ class Attempt:
         return self.outcome.commit if self.outcome else None
 
 
+# --- one driver per job ---------------------------------------------------------------------------
+
+
+class DriverLock:
+    """``driver.lock``: created exclusively, holds pid and heartbeat. Stale when the process is gone or the
+    heartbeat is older than ``STALE_LOCK_SECONDS``; a stale lock is taken over and the takeover is logged."""
+
+    def __init__(self, directory: Path, clock: Callable[[], datetime] = datetime.now):
+        self.path, self.clock = directory / LOCK_FILE, clock
+        self.started = ""
+
+    def _info(self) -> dict[str, Any] | None:
+        try:
+            value = json.loads(self.path.read_text(encoding="utf-8"))
+            return value if isinstance(value, dict) else None
+        except (OSError, ValueError):
+            return None
+
+    def stale(self, info: dict[str, Any] | None) -> str | None:
+        """Why the lock may be taken over, or None when a live driver holds it."""
+        if info is None:
+            return "unreadable lock file"
+        pid = info.get("pid")
+        if not isinstance(pid, int) or not winproc.process_alive(pid):
+            return f"driver process {pid} is not running"
+        try:
+            beat = datetime.fromisoformat(str(info.get("heartbeat")))
+        except ValueError:
+            return "no valid heartbeat"
+        if (self.clock() - beat).total_seconds() > STALE_LOCK_SECONDS:
+            return f"no heartbeat since {info.get('heartbeat')}"
+        return None
+
+    def acquire(self) -> str | None:
+        """Take the lock. Returns the reason when a stale lock was taken over."""
+        taken = None
+        for _ in range(3):
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                info = self._info()
+                why = self.stale(info)
+                if why is None:
+                    raise jb.JobError(f"job is being driven by process {info.get('pid')} (heartbeat {info.get('heartbeat')}); "
+                                      "two drivers on one job are refused")
+                taken = why
+                try:
+                    os.unlink(self.path)
+                except FileNotFoundError:
+                    pass
+                continue
+            self.started = self.clock().isoformat(timespec="seconds")
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(self._text())
+            return taken
+        raise jb.JobError("could not take the driver lock")
+
+    def _text(self) -> str:
+        return json.dumps({"pid": os.getpid(), "started": self.started,
+                           "heartbeat": self.clock().isoformat(timespec="seconds")})
+
+    def beat(self) -> None:
+        atomic_write(self.path, self._text())
+
+    def release(self) -> None:
+        info = self._info()
+        if info and info.get("pid") == os.getpid():
+            try:
+                os.unlink(self.path)
+            except OSError:
+                pass
+
+
+# --- resume ---------------------------------------------------------------------------------------
+
+
+def find_result(state: StateRoot, agent: str) -> dict[str, Any] | None:
+    """The runner's ``result.json`` for the attempt run by ``agent``, if it finished writing one."""
+    runs = state.path / "runs"
+    for path in sorted(runs.glob("*/result.json")) if runs.is_dir() else []:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and data.get("agent") == agent:
+            return data
+    return None
+
+
+def reconcile(state: StateRoot, rec: Recorder, retry: tuple[str, ...] = ()) -> dict[str, str]:
+    """Bring a job whose driver stopped back to a consistent state without launching anything.
+
+    Every attempt with a start event and no finish event is closed from the runner's ``result.json`` (reconciled)
+    or, when there is none, as ``stale``. Each subtask then gets a resume point (``verify`` / ``integrate``), is
+    left as it is, or fails as stale: a stale or failed attempt is never rerun automatically (AGENTS.md 18); only
+    an explicit ``retry`` puts a failed subtask back to ``pending`` (and resets its correction budget)."""
+    job = rec.job
+    for record in [a for a in job.attempts if not a.get("finished")]:
+        found = find_result(state, record["attempt"])
+        if found:
+            rec.emit("attempt_finished", attempt=record["attempt"], reconciled=True, runner_attempt=found.get("attempt"),
+                     exit_code=found.get("exit_code"), failure_class=found.get("failure_class"),
+                     detail=str(found.get("failure_detail") or "")[:300], run_dir=str(state.path / "runs" / found["attempt"]),
+                     usage=found.get("usage", "unknown"), duration_seconds=found.get("duration_seconds"),
+                     commit=found.get("commit_created"), files_changed=found.get("files_changed"))
+        else:
+            rec.emit("attempt_finished", attempt=record["attempt"], reconciled=True, exit_code=None, failure_class=STALE,
+                     detail="the driver stopped while this attempt ran; no result.json was written", run_dir=None)
+    start_at: dict[str, str] = {}
+    for sid in list(job.subtasks):
+        sub = job.subtasks[sid]
+        if sid in retry and sub.state in ("failed", "cancelled", "retained", "blocked_by", "verification_failed", "changes_requested"):
+            rec.emit("retry_requested", subtask=sid)
+            rec.emit("subtask_state", subtask=sid, state="pending", reason="retry requested by the user")
+            sub.budget.clear()
+            continue
+        if sub.state in ("pending", "integrated", "failed", "blocked_by", "retained", "cancelled"):
+            continue
+        last = next((a for a in reversed(job.attempts) if a.get("subtask") == sid and a.get("role") == "implement"), None)
+        if sub.state in ("ready", "implementing"):
+            if last and last.get("finished") and not last.get("failure_class") and last.get("commit"):
+                rec.emit("subtask_state", subtask=sid, state="implemented", commit=last["commit"], reason="reconciled")
+                start_at[sid] = "verify"
+            else:
+                why = (last or {}).get("failure_class") or "no attempt"
+                rec.emit("subtask_state", subtask=sid, state="failed", reason=f"stale: the implement attempt did not finish ({why})")
+        elif sub.state in ("implemented", "verifying", "verified"):
+            start_at[sid] = "verify"  # re-verification is deterministic and costs no provider quota
+        elif sub.state == "reviewing":
+            if _agreed_review_exists(state, job.task_id, sid, sub.commit):
+                rec.emit("subtask_state", subtask=sid, state="reviewed", commit=sub.commit, reason="reconciled",
+                         detail={"review": "agreed"})
+                start_at[sid] = "integrate"
+            else:
+                rec.emit("subtask_state", subtask=sid, state="failed", reason="stale: the review did not finish")
+        elif sub.state == "reviewed":
+            start_at[sid] = "integrate"
+        else:  # verification_failed / changes_requested: the correction was lost with the driver
+            rec.emit("subtask_state", subtask=sid, state="failed", reason=f"stale: stopped in {sub.state}")
+    for sid, sub in job.subtasks.items():  # dependants of retried subtasks may run again
+        if sub.state == "blocked_by" and retry:
+            rec.emit("subtask_state", subtask=sid, state="pending", reason="its dependency was retried")
+    return start_at
+
+
+def _agreed_review_exists(state: StateRoot, task_id: str, sid: str, tip: str | None) -> bool:
+    for path in sorted((state.tasks / task_id).glob(f"review-{sid}-*.md")):
+        status, commit = ws._review_commit(path)  # T23's private helper; becomes public later
+        if status == "agreed" and commit and tip and (tip.startswith(commit) or commit.startswith(tip[:7])):
+            return True
+    return False
+
+
+def options_from_record(record: Mapping[str, Any]) -> jb.JobOptions:
+    """Rebuild the options a job was started with (stored in its first event)."""
+    known = {f for f in jb.JobOptions.__dataclass_fields__}
+    values = {k: v for k, v in record.items() if k in known and k != "assign"}
+    for key in ("providers", "verify_commands", "live_branches", "pass_env"):
+        if key in values:
+            values[key] = tuple(values[key])
+    values["assign"] = {k: (v[0], v[1]) for k, v in (record.get("assign") or {}).items()}
+    return jb.JobOptions(**values)
+
+
+RESUMABLE = ("paused_user", "paused_plan_changed", "running", "preparing", "final_check", "integrating",
+             "reviewing", "verifying", "created")
+
+
+def resume_job(state: StateRoot, project_root: Path, job_id: str, *, retry: tuple[str, ...] = (),
+               verify_commands: tuple[str, ...] = (), hooks: Hooks | None = None,
+               accept_plan: bool = True) -> jb.JobState:
+    """Continue a job from its events after a pause or a driver crash. Takes the driver lock first."""
+    hooks = hooks or Hooks()
+    job, _ = jb.load_job(state, job_id)
+    directory = jb.job_dir(state, job_id)
+    if job.state == "cancelled":
+        raise jb.JobError("a cancelled job is final: start a new job")
+    if job.state == "awaiting_approval":
+        raise jb.JobError("the job already finished and waits for the user; see 'job status'")
+    if job.state == "failed" and not retry:
+        raise jb.JobError("the job failed: look at the report, then use --retry SUBTASK for an explicit retry")
+    if job.state not in (*RESUMABLE, "failed"):
+        raise jb.JobError(f"cannot resume a job in state {job.state}")
+    unknown = [sid for sid in retry if sid not in job.subtasks]
+    if unknown:
+        raise jb.JobError(f"--retry: no such subtask: {', '.join(unknown)}")
+    lock = DriverLock(directory)
+    taken = lock.acquire()
+    try:
+        options = options_from_record(job.options)
+        if verify_commands:
+            options.verify_commands = verify_commands
+        if not options.verify_commands:
+            raise jb.JobError("no full-suite command: pass --verify-command")
+        plan = jb.build_plan(state, job.task_id, options, hooks.available)
+        engine = Engine(state, project_root, job, options, plan, hooks)
+        engine.lock = lock
+        if taken:
+            engine.rec.emit("lock_takeover", reason=taken)
+        if plan.plan_revision != job.plan_revision:
+            if not accept_plan:
+                return _rest_only(engine, "paused_plan_changed", f"plan revision {job.plan_revision} -> {plan.plan_revision}")
+            engine.rec.emit("plan_revision_accepted", revision=plan.plan_revision, previous=job.plan_revision)
+        if not plan.ok:
+            return _rest_only(engine, "paused_user", "the plan has problems: " + "; ".join(plan.problems))
+        engine.rec.emit("job_resumed", retry=list(retry), previous_state=job.state)
+        engine.start_at = reconcile(state, engine.rec, retry)
+        return engine.run()
+    finally:
+        lock.release()
+
+
+def _rest_only(engine: Engine, state: str, reason: str) -> jb.JobState:
+    return engine._rest(state, reason)
+
+
 def run_job(state: StateRoot, project_root: Path, job_id: str, options: jb.JobOptions, hooks: Hooks | None = None) -> jb.JobState:
-    """Run (stage B: start) a created job in this process until it rests. Returns the final state."""
+    """Run a freshly created job in this process until it rests (holds the driver lock meanwhile)."""
     job, _ = jb.load_job(state, job_id)
     hooks = hooks or Hooks()
     plan = jb.build_plan(state, job.task_id, options, hooks.available)
     engine = Engine(state, project_root, job, options, plan, hooks)
-    if plan.plan_revision != job.plan_revision:
-        engine.rec.emit("job_state", state="paused_plan_changed",
-                        reason=f"plan revision {job.plan_revision} -> {plan.plan_revision}")
-        engine.rec.report()
-        return engine.job
-    return engine.run()
+    lock = DriverLock(jb.job_dir(state, job_id))
+    lock.acquire()
+    engine.lock = lock
+    try:
+        if plan.plan_revision != job.plan_revision:
+            return _rest_only(engine, "paused_plan_changed", f"plan revision {job.plan_revision} -> {plan.plan_revision}")
+        return engine.run()
+    finally:
+        lock.release()
+
+
+def request_cancel(state: StateRoot, job_id: str, execute: bool = False) -> str:
+    """Ask the driver of ``job_id`` to stop: writes ``cancel.requested`` (the driver polls it and kills the running
+    attempts). Returns what happened. With no live driver the job is finalised here instead."""
+    directory = jb.job_dir(state, job_id)
+    job, _ = jb.load_job(state, job_id)
+    if job.state in ("cancelled", "failed", "awaiting_approval"):
+        raise jb.JobError(f"the job is already {job.state}")
+    lock = DriverLock(directory)
+    info = lock._info() if lock.path.exists() else None
+    alive = info is not None and lock.stale(info) is None
+    if not execute:
+        return f"would write {CANCEL_MARKER} for job {job_id}" + ("" if alive else " and mark it cancelled (no live driver)")
+    atomic_write(directory / CANCEL_MARKER, json.dumps({"requested": datetime.now().isoformat(timespec="seconds")}) + "\n")
+    if alive:
+        return f"cancel requested; the driver (pid {info['pid']}) stops its workers and rests the job as cancelled"
+    rec = Recorder(state, job)
+    rec.emit("job_state", state="cancelled", reason="cancelled with no live driver")
+    rec.report()
+    return "no live driver: the job is marked cancelled; worktrees and evidence are kept"
