@@ -34,7 +34,7 @@ def test_integration_gate_reads_the_status_header(tmp_path):
         path = tmp_path / f"review-{verdict.replace(' ', '-')}.md"
         write_review(path, [("status", verdict), ("subtask", "A"), ("agent", "codex-w1"), ("commit", sha)],
                      f"verdict: {verdict}\n", "codex-w1")
-        assert ws._review_commit(path) == (gate, sha)
+        assert ws.review_commit(path) == (gate, sha)
 
 
 def test_status_is_the_first_header_line(tmp_path):

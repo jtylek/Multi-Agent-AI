@@ -480,7 +480,7 @@ def preflight_for_execution(project_root: Path, state: StateRoot, task_id: str, 
 _SHA = re.compile(r"\b([0-9a-f]{7,40})\b")
 
 
-def _review_commit(path: Path) -> tuple[str | None, str | None]:
+def review_commit(path: Path) -> tuple[str | None, str | None]:
     """(status, commit sha or prefix) from a review file's headers; ``commit`` or ``reviewed``."""
     try:
         doc = read_document(path)
@@ -494,6 +494,10 @@ def _review_commit(path: Path) -> tuple[str | None, str | None]:
     return status, found.group(1) if found else None
 
 
+_review_commit = review_commit
+"""Old private name, kept for callers written before the helper became public (T27)."""
+
+
 def _reviewed(state: StateRoot, task_id: str, subtask, sha: str) -> str | None:
     """None when the commit is covered by an agreeing review (or review is waived), else why not."""
     if subtask.review_waived:
@@ -503,7 +507,7 @@ def _reviewed(state: StateRoot, task_id: str, subtask, sha: str) -> str | None:
         return f"no review file review-{subtask.id}-*.md"
     seen = []
     for path in files:
-        status, commit = _review_commit(path)
+        status, commit = review_commit(path)
         if status == "agreed" and commit and sha.startswith(commit):
             return None
         seen.append(f"{path.name}: status={status or '?'} commit={commit or '?'}")

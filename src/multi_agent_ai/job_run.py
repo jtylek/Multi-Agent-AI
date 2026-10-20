@@ -448,7 +448,7 @@ class Engine:
             if out.failure_class:
                 return ReviewResult("failed", out.failure_class, reason=out.detail)
             review_path = out.outcome.review_path if out.outcome else None
-            status, commit = ws._review_commit(review_path) if review_path else (None, None)  # T23's private helper; becomes public later
+            status, commit = ws.review_commit(review_path) if review_path else (None, None)
             if status == "agreed" and commit and tip.startswith(commit[:7]) or status == "agreed" and commit and commit.startswith(tip[:7]):
                 return ReviewResult("agreed")
             if status == "changes requested":
@@ -637,7 +637,7 @@ def reconcile(state: StateRoot, rec: Recorder, retry: tuple[str, ...] = ()) -> d
 
 def _agreed_review_exists(state: StateRoot, task_id: str, sid: str, tip: str | None) -> bool:
     for path in sorted((state.tasks / task_id).glob(f"review-{sid}-*.md")):
-        status, commit = ws._review_commit(path)  # T23's private helper; becomes public later
+        status, commit = ws.review_commit(path)
         if status == "agreed" and commit and tip and (tip.startswith(commit) or commit.startswith(tip[:7])):
             return True
     return False
