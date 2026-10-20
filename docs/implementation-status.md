@@ -68,6 +68,11 @@ listed below is planned, not implemented.
   through. Output is parsed defensively; the provider-reported cost is recorded as such (not API
   pricing). T15/T18 stay strict: with no listed CLI version a limit is a `provider_error`. Tested
   with fake executables only; see "Unverified until the first real run".
+- T28: the Copilot shell tool is a profile data field (`SHELL_TOOL`); implement runs pre-create the
+  parent directories of the subtask's `files/area` inside the worktree (all-or-none, unsafe paths
+  refuse the run as `environment`, dry run reports `directories_to_create`, module
+  `workers/scaffold.py`); Copilot's full `usage.json` totals are recorded in the attempt as measured
+  `usage_totals`.
 - CLI `worker run --provider codex|copilot|claude --task T --subtask S --agent-id ID --mode
   review|implement --worktree ABS [--model M] [--timeout S] [--commit SHA]
   [--verify-command C] [--live-branch B]... [--pass-env NAME]... [--execute]`: one managed
@@ -115,6 +120,10 @@ Review-file parsing; message cleanup and
 bounded watches (formats.md section 7); OS-level isolation of
 workers (filesystem/network); creating worktrees; verification and routing; VS Code
 integration.
+
+Unverified until the first real run (Copilot, T28): the Windows name of the shell tool for
+`--available-tools` (`SHELL_TOOL = "powershell"` is a guess; `bash` was rejected as nonexistent in
+the first real run) and therefore still the matching of `shell(<verification command>)`.
 
 Unverified until the first real run (Claude, T24; each is a T25 check): that `claude -p` reads the
 prompt from stdin; that the `PowerShell` tool is available and that `PowerShell(git diff *)` and

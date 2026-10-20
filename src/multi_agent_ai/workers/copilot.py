@@ -8,7 +8,7 @@ argv (``<V>`` = the verification-command pattern, a profile parameter)::
 
     copilot -C <wt> -p <PROMPT> --output-format json --silent --session-id <uuid>
             --usage-output-file <run>/usage.json --disallow-temp-dir [--model M]
-            --available-tools=bash,view,grep,glob
+            --available-tools=<S>,view,grep,glob          (<S> = SHELL_TOOL, "powershell"; see below)
             --allow-tool=shell(git diff),shell(git log),shell(git show),shell(<V>)
             --deny-tool=shell(git commit),shell(git push),url
 
@@ -86,13 +86,27 @@ class CopilotProfile:
 _GIT_READ = ("shell(git diff)", "shell(git log)", "shell(git show)")
 _DENY = ("shell(git commit)", "shell(git push)", "url")
 
-PROFILES = {
-    "review": CopilotProfile("copilot-review", ("bash", "view", "grep", "glob"), _GIT_READ, (), _DENY),
-    "implement": CopilotProfile(
-        "copilot-implement", ("bash", "create", "edit", "view", "grep", "glob"), _GIT_READ, ("write",), _DENY
-    ),
-}
-"""The single place where Copilot permissions are configured (from T13)."""
+SHELL_TOOL = "powershell"
+"""Name of the shell tool for ``--available-tools``. T13 documented ``bash``, but the first real
+run on Windows (T25 P1) was answered ``Tool 'bash' does not exist.``. Neither ``copilot --help``,
+``copilot help permissions`` nor the installed package names the Windows tool (the CLI's code is
+compressed inside the binary), so ``powershell`` is a best guess that one approved real run
+confirms or flips: change this one constant (or pass ``shell_tool`` to :func:`make_profiles`).
+The ``shell(...)`` permission kind in ``--allow-tool``/``--deny-tool`` is documented by
+``copilot help permissions`` as the kind for every shell command and does not depend on it."""
+
+
+def make_profiles(shell_tool: str = SHELL_TOOL) -> dict[str, CopilotProfile]:
+    return {
+        "review": CopilotProfile("copilot-review", (shell_tool, "view", "grep", "glob"), _GIT_READ, (), _DENY),
+        "implement": CopilotProfile(
+            "copilot-implement", (shell_tool, "create", "edit", "view", "grep", "glob"), _GIT_READ, ("write",), _DENY
+        ),
+    }
+
+
+PROFILES = make_profiles()
+"""The single place where Copilot permissions are configured (from T13, shell tool from T28)."""
 
 _UNSAFE_PATTERN = re.compile(r"[(),\r\n\0]")
 
@@ -129,6 +143,81 @@ def final_message_from_events(events: list[dict[str, Any]]) -> str | None:
     return message
 
 
+def _count(value: Any) -> int | float | None:
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def usage_totals(document: Any) -> dict[str, Any] | None:
+    """Full run totals from the usage file written by ``--usage-output-file`` (field names from a
+    real run, Copilot CLI 1.0.98): ``input_tokens`` is the FULL input (``modelMetrics`` summed over
+    models; else fresh + cache_read + cache_write), ``fresh_input_tokens`` the uncached part, plus
+    cache_read, cache_write and output from ``tokenDetails``, reasoning tokens and request count from
+    ``modelMetrics``, ``totalPremiumRequestCost`` and the
+    model. Everything is provider-reported, hence ``source: measured``; absent fields are left out,
+    never invented. Returns None when nothing usable is present."""
+    if not isinstance(document, dict):
+        return None
+    totals: dict[str, Any] = {}
+    details = document.get("tokenDetails")
+    components: dict[str, int | float] = {}
+    if isinstance(details, dict):
+        for key in ("input", "cache_read", "cache_write", "output"):
+            entry = details.get(key)
+            count = _count(entry.get("tokenCount")) if isinstance(entry, dict) else None
+            if count is not None:
+                components[key] = count
+    # tokenDetails.input is only the FRESH (uncached) input. The full input is fresh + cache_read +
+    # cache_write, which modelMetrics.<model>.usage.inputTokens reports directly (see below).
+    for key in ("cache_read", "cache_write", "output"):
+        if key in components:
+            totals[f"{key}_tokens"] = components[key]
+    if "input" in components:
+        totals["fresh_input_tokens"] = components["input"]
+    models = document.get("modelMetrics")
+    if isinstance(models, dict) and models:
+        reasoning = requests = full_input = 0
+        found_reasoning = found_requests = found_input = False
+        for metrics in models.values():
+            if not isinstance(metrics, dict):
+                continue
+            full = _count(metrics["usage"].get("inputTokens")) if isinstance(metrics.get("usage"), dict) else None
+            if full is not None:
+                full_input, found_input = full_input + full, True
+            used = _count((metrics.get("usage") or {}).get("reasoningTokens")) if isinstance(metrics.get("usage"), dict) else None
+            if used is not None:
+                reasoning, found_reasoning = reasoning + used, True
+            count = _count((metrics.get("requests") or {}).get("count")) if isinstance(metrics.get("requests"), dict) else None
+            if count is not None:
+                requests, found_requests = requests + count, True
+        if found_input:
+            totals["input_tokens"] = full_input
+        if found_reasoning:
+            totals["reasoning_tokens"] = reasoning
+        if found_requests:
+            totals["request_count"] = requests
+        totals["models"] = sorted(str(name) for name in models)
+    if "input_tokens" not in totals and "fresh_input_tokens" in totals:
+        # no per-model figure: the full input is fresh + cache_read + cache_write
+        totals["input_tokens"] = (totals["fresh_input_tokens"] + totals.get("cache_read_tokens", 0)
+                                  + totals.get("cache_write_tokens", 0))
+    for source, target in (("totalPremiumRequestCost", "premium_request_cost"), ("totalUserRequests", "user_requests"),
+                           ("totalApiDurationMs", "api_duration_ms"), ("totalNanoAiu", "nano_aiu")):
+        value = _count(document.get(source))
+        if value is not None:
+            totals[target] = value
+    if isinstance(document.get("currentModel"), str):
+        totals["model"] = document["currentModel"]
+    for source, target in (("lastCallInputTokens", "last_call_input_tokens"),
+                          ("lastCallOutputTokens", "last_call_output_tokens")):
+        value = _count(document.get(source))
+        if value is not None:
+            totals[target] = value
+    if not totals:
+        return None
+    totals["source"] = "measured"
+    return totals
+
+
 class CopilotAdapter(ProviderAdapter):
     name = "copilot"
     command = "copilot"
@@ -163,9 +252,13 @@ class CopilotAdapter(ProviderAdapter):
         if error is None and message is None:
             error = "no assistant message found in the JSONL output"
         usage: dict[str, int] | str = "unknown"
+        session: dict[str, Any] = {}
         if invocation.usage_path is not None and invocation.usage_path.is_file():
             try:
-                usage = token_counts(json.loads(invocation.usage_path.read_text(encoding="utf-8"))) or "unknown"
+                document = json.loads(invocation.usage_path.read_text(encoding="utf-8"))
+                usage = token_counts(document) or "unknown"  # includes the lastCall* values
+                if totals := usage_totals(document):
+                    session["usage_totals"] = totals
             except (OSError, ValueError):
                 usage = "unknown"
-        return ParsedOutput(message, usage, error)
+        return ParsedOutput(message, usage, error, session)

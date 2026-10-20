@@ -610,7 +610,7 @@ def test_copilot_review_end_to_end_with_awkward_prompt(env):
     assert record["argv"] == [
         "-C", str(env.worktree), "-p", prompt, "--output-format", "json", "--silent", "--session-id", session,
         "--usage-output-file", str(outcome.run_dir / "usage.json"), "--disallow-temp-dir",
-        "--available-tools=bash,view,grep,glob",
+        "--available-tools=powershell,view,grep,glob",
         r"--allow-tool=shell(git diff),shell(git log),shell(git show),shell(.venv\Scripts\python -m pytest -q)",
         "--deny-tool=shell(git commit),shell(git push),url",
     ]

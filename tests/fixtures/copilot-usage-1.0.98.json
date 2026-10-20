@@ -1,0 +1,38 @@
+{
+  "totalPremiumRequestCost": 1,
+  "totalUserRequests": 1,
+  "totalNanoAiu": 2243970000,
+  "aiCreditsStatus": "complete",
+  "tokenDetails": {
+    "input": {"tokenCount": 10},
+    "cache_read": {"tokenCount": 27097},
+    "cache_write": {"tokenCount": 5100},
+    "output": {"tokenCount": 696}
+  },
+  "totalApiDurationMs": 6901,
+  "sessionStartTime": "2026-10-19T23:44:15.573Z",
+  "codeChanges": {"linesAdded": 0, "linesRemoved": 0, "filesModifiedCount": 0, "filesModified": []},
+  "modelMetrics": {
+    "claude-sonnet-5.5": {
+      "requests": {"count": 4, "cost": 1},
+      "usage": {
+        "inputTokens": 32207,
+        "outputTokens": 696,
+        "cacheReadTokens": 27097,
+        "cacheWriteTokens": 5100,
+        "reasoningTokens": 64
+      },
+      "totalNanoAiu": 2243970000,
+      "aiCreditsStatus": "complete",
+      "tokenDetails": {
+        "input": {"tokenCount": 10},
+        "cache_read": {"tokenCount": 27097},
+        "cache_write": {"tokenCount": 5100},
+        "output": {"tokenCount": 696}
+      }
+    }
+  },
+  "currentModel": "claude-sonnet-5.5",
+  "lastCallInputTokens": 8481,
+  "lastCallOutputTokens": 262
+}
