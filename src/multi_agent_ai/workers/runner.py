@@ -34,11 +34,12 @@ from ..state import StateIndex, StateRoot
 from . import failures as fc
 from . import gitops, quota, versions
 from .base import MODES, Invocation, LaunchRequest, ProfileUnconfigured, ProviderAdapter, forbidden_in
+from .claude import ClaudeAdapter
 from .codex import CodexAdapter
 from .copilot import CopilotAdapter
 from .prompt import VerificationNotDeclared, build_prompt, verification_command
 
-ADAPTERS: dict[str, Callable[[], ProviderAdapter]] = {"codex": CodexAdapter, "copilot": CopilotAdapter}
+ADAPTERS: dict[str, Callable[[], ProviderAdapter]] = {"codex": CodexAdapter, "copilot": CopilotAdapter, "claude": ClaudeAdapter}
 DEFAULT_LIVE_BRANCHES = ("main", "master")
 DEFAULT_TIMEOUT = 1800.0
 RESERVED_AGENT_IDS = ("codex", "copilot", "claude", "code")
@@ -67,6 +68,8 @@ class WorkerRequest:
     live_branches: tuple[str, ...] = ()
     pass_env: tuple[str, ...] = ()
     verify_command: str | None = None
+    max_budget_usd: float | None = None
+    """Per-attempt spending cap; only the Claude adapter has one (off by default)."""
 
 
 @dataclass
@@ -107,6 +110,11 @@ def validate_request(req: WorkerRequest) -> None:
         raise UsageError(f"--commit must be a commit SHA, got {req.commit!r}")
     if not req.timeout or req.timeout <= 0:
         raise UsageError("--timeout must be positive")
+    if req.max_budget_usd is not None:
+        if req.provider != "claude":
+            raise UsageError(f"--max-budget-usd is only supported for the claude provider, not {req.provider}")
+        if not isinstance(req.max_budget_usd, (int, float)) or not 0 < req.max_budget_usd < float("inf"):
+            raise UsageError("--max-budget-usd must be a positive number")
     for name in req.pass_env:
         if name.upper() in {n.upper() for n in winproc.NEVER_PASS_ENV}:
             raise UsageError(f"{name} grants blanket permissions and is never passed to a worker")
@@ -336,7 +344,8 @@ def run_worker(
     atomic_write(prompt_path, prompt)
     run.result["prompt_sha256"] = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     session_id = str(uuid.uuid4())
-    launch = LaunchRequest(req.worktree, req.mode, prompt, prompt_path, run.run_dir, req.model, session_id, verify)
+    launch = LaunchRequest(req.worktree, req.mode, prompt, prompt_path, run.run_dir, req.model, session_id, verify,
+                           req.max_budget_usd)
     try:
         invocation = adapter.build_invocation(launch)
     except ProfileUnconfigured as exc:
@@ -347,8 +356,8 @@ def run_worker(
         return finish(f"refusing forbidden flag(s) {bad}")
     run.result["profile"] = invocation.profile
     run.result["verify_command"] = verify
-    if req.provider == "copilot":
-        run.result["session_id"] = session_id
+    if req.provider == "copilot" or (req.provider == "claude" and req.mode == "implement"):
+        run.result["session_id"] = session_id  # the id the provider was told to use (resumable)
 
     base_env = env if env is not None else os.environ
     child_env = winproc.build_env(base_env, (*adapter.env_names, *req.pass_env))
@@ -419,6 +428,8 @@ def run_worker(
     run.result["usage"] = parsed_output.usage
     if parsed_output.session:
         run.result["provider_session"] = parsed_output.session
+        if "provider_reported_cost_usd" in parsed_output.session:  # a provider figure, not API pricing
+            run.result["provider_reported_cost_usd"] = parsed_output.session["provider_reported_cost_usd"]
     if result.exit_code != 0 and not result.timed_out:
         finding = quota.detect(req.provider, stdout, stderr, cli_version=cli_version)  # positive identification only
         if finding is not None:
@@ -529,7 +540,7 @@ def preview_worker(
     # the paths below are never created in a dry run; adapters only build argv from them
     run_dir = req.state_root.path / "runs" / "dry-run"
     launch = LaunchRequest(req.worktree, req.mode, prompt, run_dir / "prompt.md", run_dir, req.model,
-                           str(uuid.uuid4()), verify)
+                           str(uuid.uuid4()), verify, req.max_budget_usd)
     try:
         invocation = adapter.build_invocation(launch)
     except ProfileUnconfigured as exc:
@@ -559,7 +570,7 @@ def preview_worker(
     return preview
 
 
-_RESUME = {"codex": "codex exec resume {id}", "copilot": "copilot --resume {id}"}
+_RESUME = {"codex": "codex exec resume {id}", "copilot": "copilot --resume {id}", "claude": "claude --resume {id}"}
 
 
 def _limit_record(run: _Run, finding: quota.LimitFinding, before: gitops.Snapshot, session_id: str,
@@ -567,7 +578,10 @@ def _limit_record(run: _Run, finding: quota.LimitFinding, before: gitops.Snapsho
     """The per-attempt limit record (plan T15 item 5). The resume command is recorded for a human or
     the coordinator; the orchestrator never runs it (a resume is a new, linked attempt)."""
     req = run.req
-    session = provider_session.get("thread_id") or (session_id if req.provider == "copilot" else None)
+    own_session = req.provider == "copilot" or (req.provider == "claude" and req.mode == "implement")
+    resumable = not (req.provider == "claude" and req.mode == "review")  # review runs are not persisted
+    session = (provider_session.get("thread_id") or provider_session.get("session_id") or
+               (session_id if own_session else None)) if resumable else None
     try:
         diff_stat = gitops.git(req.worktree, "diff", "--stat", "HEAD").strip()
     except gitops.GitError as exc:

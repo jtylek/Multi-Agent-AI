@@ -14,6 +14,7 @@ from .notify import format_notify, notify_message
 from .reachability import discover_agents
 from .registry import reservation_conflicts, read_registry
 from .report import format_text, index_entries, scan, to_dict
+from . import workspace_cli
 from .state import StateIndex, init_state_root, read_config, resolve_state_root
 
 
@@ -78,10 +79,11 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--run-dir", default=None)
     verify.add_argument("--env", action="append", default=[], metavar="NAME",
                         help="environment variable name allowed through to commands")
-    verify.add_argument("--project-root", default=".", help="project root for the default run directory")
+    verify.add_argument("--project-root", default=None, help="project root for the default run directory")
     verify.add_argument("--state-root", default=None, help="state root for the default run directory")
     verify.add_argument("--json", action="store_true", help="machine-readable output")
     _add_worker_parser(sub)
+    workspace_cli.add_parser(sub)
     return parser
 
 
@@ -105,7 +107,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         from .verify import CommandSpec, VerificationSpec, verify
 
-        root = resolve_state_root(args.project_root, args.state_root)
+        project_root_was_omitted = args.project_root is None
+        state_root_was_omitted = args.state_root is None
+        project_root = args.project_root or "."
+        root = resolve_state_root(project_root, args.state_root)
         from .verify import CommandSpec, VerificationSpec, parse_command, verify
 
         try:
@@ -132,13 +137,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.json:
             print(json.dumps(result.as_dict(), indent=2, ensure_ascii=False))
         else:
-            print(f"{result.status}: {result.run_dir} ({result.duration_seconds:.3f}s)")
+            if project_root_was_omitted and state_root_was_omitted:
+                print("project root: current directory (both --project-root and --state-root omitted)")
+            print(f"{result.status}; run directory: {result.run_dir} ({result.duration_seconds:.3f}s)")
             if result.error:
                 print(result.error, file=sys.stderr)
             for item in result.commands:
                 if item.status != "passed":
                     print(f"failed command: {' '.join(item.argv)}; logs: {item.stdout_file}, {item.stderr_file}", file=sys.stderr)
         return 0 if result.ok else 1
+    if args.command == "workspace":  # T23: see workspace_cli.py
+        return workspace_cli.main(args)
     if args.command == "worker":  # T12 block: see _add_worker_parser / _worker_main below
         return _worker_main(args)
     project_root = resolve_state_root(args.project_root).path.parent
@@ -261,7 +270,7 @@ def _add_worker_parser(sub: argparse._SubParsersAction) -> None:
     help_text = ("run one managed worker attempt: build the prompt from plan.md, launch the provider "
                  "with a least-privilege profile, check the worktree, record the attempt (no retries)")
     run = worker_sub.add_parser("run", help=help_text, description=help_text)
-    run.add_argument("--provider", required=True, choices=("codex", "copilot"))
+    run.add_argument("--provider", required=True, choices=("codex", "copilot", "claude"))
     run.add_argument("--task", required=True, help="task id (tasks/<task-id>/plan.md)")
     run.add_argument("--subtask", required=True, help="subtask id from the plan's subtask table")
     run.add_argument("--agent-id", required=True, help="new managed-worker id, e.g. codex-w1 (never an existing chat's id)")
@@ -269,6 +278,8 @@ def _add_worker_parser(sub: argparse._SubParsersAction) -> None:
     run.add_argument("--worktree", required=True, help="absolute path of the worker's Git worktree")
     run.add_argument("--model", default=None, help="provider model (default: the provider's own default)")
     run.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help="seconds before the process tree is killed")
+    run.add_argument("--max-budget-usd", type=float, default=None,
+                     help="claude only: per-attempt spending cap passed as --max-budget-usd (off by default)")
     run.add_argument("--commit", default=None, help="review mode: SHA of the commit to review (default: worktree HEAD)")
     run.add_argument("--verify-command", default=None,
                      help="verification command (default: taken from plan.md); Copilot allows exactly shell(<command>)")
@@ -298,6 +309,7 @@ def _worker_main(args: argparse.Namespace) -> int:
         mode=args.mode, worktree=Path(args.worktree), project_root=Path(args.project_root).resolve(),
         state_root=root, model=args.model, timeout=args.timeout, commit=args.commit,
         live_branches=tuple(args.live_branch), pass_env=tuple(args.pass_env), verify_command=args.verify_command,
+        max_budget_usd=args.max_budget_usd,
     )
     try:
         if not args.execute:

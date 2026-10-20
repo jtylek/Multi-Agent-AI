@@ -23,8 +23,10 @@ FORBIDDEN_FLAGS = (
     "--allow-all-tools", "--allow-all-paths", "--allow-all", "--yolo", "--allow-all-urls",
     "--no-ask-user", "--autopilot", "--assisted-approval", "--allow-all-mcp-server-instructions",
     "--enable-all-github-mcp-tools", "--share-gist", "--remote", "--add-dir",
-    # Claude Code (not adapted yet; listed so a future adapter is scanned too)
-    "--dangerously-skip-permissions",
+    # Claude Code. --permission-mode is never emitted at all (no bypassPermissions, no auto).
+    "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions", "--permission-mode",
+    "bypassPermissions", "--chrome", "--remote-control", "--cloud", "--teleport", "--bg", "--background",
+    "--worktree", "-w", "--settings", "--plugin-dir", "--plugin-url", "--file", "--betas",
 )
 """Flags (or flag values) that bypass approvals, sandboxing or path/tool/URL checks, or send
 data off the machine. No adapter may ever emit one; tests scan every generated argv."""
@@ -58,6 +60,8 @@ class LaunchRequest:
     verify_command: str | None = None
     """The project's verification command (used where a provider needs it, e.g. Copilot's
     ``shell(...)`` allowance)."""
+    max_budget_usd: float | None = None
+    """Optional per-attempt spending cap, passed through only by providers that have one (Claude)."""
 
 
 @dataclass(frozen=True)

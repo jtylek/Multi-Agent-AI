@@ -166,6 +166,35 @@ Verification sections may use one `verify: <subtask-id>: \`command\`` entry per 
 orchestrator selects the matching entry and converts the declared command to argv without a
 shell. Existing single-subtask plans retain the legacy last-inline-code fallback when no
 matching entry exists; multi-subtask plans must declare each command explicitly.
+## D18. Worktree lifecycle conventions: Accepted (coordinator), 2026-10-20
+
+The workspace manager (T23, `workspace.py`, `multi-agent-ai workspace`) follows these rules.
+Git stays the source of truth; `tasks/<task-id>/workspaces.json` is a derived record only the
+manager writes (machine-only JSON, not part of the authoritative protocol files).
+
+- Branches `task/<task-id>/integration` and `task/<task-id>/<subtask-id>`; the subtask id
+  `integration` is reserved. Protected branches: `main`, `master`, `--live-branch` entries and
+  whatever the primary checkout has checked out.
+- Worktree path `<worktrees-root>/<project-dir-name>-<subtask-id>`; the root defaults to the `wt`
+  directory next to the project, `--worktrees-root` overrides it (a profile setting later). The
+  path must be absolute, outside the project and the state root, not existing, under 240
+  characters. The integration branch has its own worktree so merges never touch the primary
+  checkout.
+- A subtask that depends on others branches from the integration tip once its dependencies are
+  recorded as merged; independent subtasks branch from the plan's `base-commit`. A base not
+  reachable from a protected branch is allowed with a warning.
+- `integrate` merges only reviewed tips: the subtask branch tip must be named by an agreeing
+  review file (`status: agreed` first line, `commit`/`reviewed` header naming that SHA) or the
+  review must be waived in the plan. It merges with `--no-ff` in the order given, dependencies
+  first, and stops at the first refusal or conflict (`git merge --abort`, conflicting paths
+  reported, integration worktree left clean). A collect-all dry run via `merge-tree` is later work.
+- Every mutating subcommand is a dry run unless `--execute` is given. The manager removes
+  worktrees only, never branches: a branch is deleted by the user or the coordinator. Only a
+  completed (merged, clean, unlocked) worktree is removed, without `--force`. A failed
+  subtask's worktree is marked `retained` and kept; only the user passes `--discard-failed`.
+- A lock file `workspaces.lock` (created exclusively) serialises operations; a stale lock is
+  reported, never deleted automatically.
+- Follow-up task, not part of T23: `worker run --mode implement` calls the manager's preflight.
 
 ## Open
 

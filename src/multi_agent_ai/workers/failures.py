@@ -40,16 +40,17 @@ FAILURE_CLASSES = (
 PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (UNSUPPORTED_MODEL, re.compile(
         r"model[^\n]{0,80}(not supported|not found|does not exist|is not available|unavailable|unknown|invalid)"
-        r"|(unknown|unsupported|invalid) model|model_not_found|no access to model"
+        r"|(unknown|unsupported|invalid) model|model_not_found|no access to model|selected model.{0,80}may not exist"
         r"|do(es)? not have access to (the )?model", re.I)),
     (AUTH, re.compile(
         r"not logged in|not authenticated|authentication (failed|required|error)|unauthori[sz]ed|\b401\b"
         r"|please (log ?in|login|sign in|authenticate)|login required|invalid api key|no (valid )?credentials"
-        r"|token (has )?expired|copilot login|codex login", re.I)),
+        r"|token (has )?expired|copilot login|codex login|run /login|/login to", re.I)),
     (PERMISSION_DENIED, re.compile(
         r"permission (was |is )?denied|denied by (the )?(user|policy|permission)|tool[^\n]{0,60}(was |is )?"
         r"(denied|not (allowed|permitted))|not permitted to (run|use)|requires? (user )?approval"
-        r"|rejected by (the )?sandbox|blocked by (the )?sandbox", re.I)),
+        r"|rejected by (the )?sandbox|blocked by (the )?sandbox"
+        r"|requested permissions? to use|haven't granted it|permission to use[^\n]{0,40}(was )?denied", re.I)),
     (INVALID_ARGUMENTS, re.compile(
         r"unexpected argument|unknown (option|argument|flag)|invalid value .* for|unrecognized (option|argument)"
         r"|error: the argument|missing required argument|for more information, try '--help'", re.I)),
