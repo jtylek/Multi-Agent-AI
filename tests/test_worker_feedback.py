@@ -7,10 +7,13 @@ from test_workers_units import prompt_for  # noqa: F401  (same fixtures as the p
 from test_workers_units import make_plan, WT
 
 
+BOARD = Path(r"C:\p\.multi-agent-ai\tasks\demo\plan.md")
+
+
 def build(feedback=None, mode="implement"):
     plan = make_plan()
     return pr.build_prompt(plan=plan, subtask=plan.subtask("T1"), agent_id="codex-w1", provider="codex", mode=mode,
-                           worktree=WT, branch="task/demo/T1", board_path=Path(r"C:p.multi-agent-ai	asksdemoplan.md"),
+                           worktree=WT, branch="task/demo/T1", board_path=BOARD,
                            commit="abc1234" if mode == "review" else None, feedback=feedback)
 
 
