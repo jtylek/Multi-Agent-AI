@@ -49,6 +49,13 @@ listed below is planned, not implemented.
   writes nothing and never calls a provider, so sign-in is always reported as `not checked`.
   Statuses: `ok`, `warn`, `fail`, `not checked`; a missing CLI is a warning unless none is
   installed; exit 1 only when a check fails.
+- Worktree lifecycle manager (T23, `workspace.py`, CLI `workspace create-integration | create |
+  check | list | integrate | remove | retain`, decision D18): integration branch and one
+  branch plus worktree per subtask with base and path validation, protected-branch refusal,
+  dirty and locked detection, review-gated `--no-ff` integration in dependency order that stops at
+  the first conflict, removal of completed worktrees only (branches are never deleted) and
+  retained failed worktrees. Dry run unless `--execute`. Tested in temporary Git repositories only;
+  `worker run` does not call its preflight yet (follow-up).
 - CLI `worker run --provider codex|copilot --task T --subtask S --agent-id ID --mode
   review|implement --worktree ABS [--model M] [--timeout S] [--commit SHA]
   [--verify-command C] [--live-branch B]... [--pass-env NAME]... [--execute]`: one managed
