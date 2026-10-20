@@ -280,3 +280,33 @@ def test_classify_table(fields, expected):
 
 def test_every_failure_class_is_reachable():
     assert {e for _, e in CASES if e} == set(fc.FAILURE_CLASSES)
+
+
+def test_worktree_info_answers_with_one_git_call(tmp_path, monkeypatch):
+    import subprocess
+
+    from multi_agent_ai.workers import gitops
+
+    git_exe = gitops.git_executable()
+    repo = tmp_path / "repo with space"
+    repo.mkdir()
+    for args in (("init", "-q", "-b", "main"), ("config", "user.name", "t"), ("config", "user.email", "t@x.invalid"),
+                 ("config", "commit.gpgsign", "false"), ("commit", "-q", "--allow-empty", "-m", "base")):
+        subprocess.run([git_exe, *args], cwd=repo, check=True, capture_output=True)
+    wt = tmp_path / "wt"
+    subprocess.run([git_exe, "worktree", "add", "-q", "-b", "task/x/T1", str(wt)], cwd=repo, check=True, capture_output=True)
+    count = []
+    real = gitops.git
+    monkeypatch.setattr(gitops, "git", lambda *a, **k: (count.append(a), real(*a, **k))[1])
+    primary, linked = gitops.worktree_info(repo), gitops.worktree_info(wt)
+    assert len(count) == 2
+    assert (primary.branch, primary.is_linked_worktree) == ("main", False)
+    assert (linked.branch, linked.is_linked_worktree) == ("task/x/T1", True)
+    assert len(linked.head) == 40 and linked.head == primary.head
+    subprocess.run([git_exe, "checkout", "-q", "--detach"], cwd=wt, check=True, capture_output=True)
+    assert gitops.worktree_info(wt).branch is None
+    with pytest.raises(gitops.GitError, match="not the top level"):
+        (wt / "sub").mkdir()
+        gitops.worktree_info(wt / "sub")
+    with pytest.raises(gitops.GitError):
+        gitops.worktree_info(tmp_path)  # not a repository at all

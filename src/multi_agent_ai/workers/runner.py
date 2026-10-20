@@ -332,7 +332,7 @@ def run_worker(
     run.branch = info.branch
     exclude = req.state_root.path if _inside(req.state_root.path, req.worktree) else None
     try:
-        before = gitops.snapshot(req.worktree, exclude)
+        before = gitops.snapshot(req.worktree, exclude, info)
     except gitops.GitError as exc:
         evidence["environment_error"] = True
         return finish(str(exc))
@@ -350,7 +350,7 @@ def run_worker(
     commit = None
     if req.mode == "review":
         try:
-            commit = gitops.git(req.worktree, "rev-parse", "--verify", f"{req.commit or 'HEAD'}^{{commit}}").strip()
+            commit = _commit_to_review(req, info)
         except gitops.GitError as exc:
             evidence["environment_error"] = True
             return finish(f"commit to review not found: {exc}")
@@ -485,6 +485,13 @@ def run_worker(
     return finish(detail)
 
 
+def _commit_to_review(req: WorkerRequest, info: gitops.WorktreeInfo) -> str:
+    """The commit a review is about: ``--commit`` resolved by Git, else the worktree's HEAD (already known)."""
+    if req.commit is None:
+        return info.head
+    return gitops.git(req.worktree, "rev-parse", "--verify", f"{req.commit}^{{commit}}").strip()
+
+
 def _implement_refusal(req: WorkerRequest, info: gitops.WorktreeInfo, before: Any) -> str | None:
     """Why implement mode must not start in this worktree (None when it may)."""
     live = {*DEFAULT_LIVE_BRANCHES, *req.live_branches}
@@ -544,7 +551,7 @@ def preview_worker(
     try:
         info = gitops.worktree_info(req.worktree)
         exclude = req.state_root.path if _inside(req.state_root.path, req.worktree) else None
-        before = gitops.snapshot(req.worktree, exclude)
+        before = gitops.snapshot(req.worktree, exclude, info)
     except gitops.GitError as exc:
         problems.append(f"invalid worktree: {exc}")
         return preview
@@ -561,7 +568,7 @@ def preview_worker(
                 problems.append(f"files/area of {req.subtask_id} cannot be prepared: {exc}")
     else:
         try:
-            commit = gitops.git(req.worktree, "rev-parse", "--verify", f"{req.commit or 'HEAD'}^{{commit}}").strip()
+            commit = _commit_to_review(req, info)
             preview["commit_to_review"] = commit
         except gitops.GitError as exc:
             problems.append(f"commit to review not found: {exc}")

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -60,18 +61,25 @@ class WorktreeInfo:
     """False for a repository's main working tree (the primary checkout)."""
 
 
+_OBJECT_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+
+
 def worktree_info(path: Path) -> WorktreeInfo:
-    """Raises GitError when ``path`` is not the top level of a Git working tree."""
+    """Raises GitError when ``path`` is not the top level of a Git working tree.
+
+    One ``git rev-parse`` answers everything: top level, git dir, common dir, HEAD commit and the current
+    branch (``--abbrev-ref HEAD`` prints ``HEAD`` for a detached HEAD; no branch can be called that)."""
     if not path.is_dir():
         raise GitError(f"worktree {path} does not exist")
-    top = Path(git(path, "rev-parse", "--show-toplevel").strip())
+    lines = git(path, "rev-parse", "--path-format=absolute", "--show-toplevel", "--absolute-git-dir",
+                "--git-common-dir", "HEAD", "--abbrev-ref", "HEAD").splitlines()
+    if len(lines) != 5 or not _OBJECT_ID.fullmatch(lines[3].strip()):
+        raise GitError(f"git rev-parse gave an unexpected answer for {path}: {lines!r}")
+    top, git_dir, common, head, branch = (line.strip() for line in lines)
     if not same_path(top, path):
         raise GitError(f"{path} is not the top level of a Git working tree (top level: {top})")
-    head = git(path, "rev-parse", "--verify", "HEAD").strip()
-    branch = git(path, "symbolic-ref", "--short", "-q", "HEAD", check=False).strip() or None
-    git_dir = git(path, "rev-parse", "--absolute-git-dir").strip()
-    common = git(path, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
-    return WorktreeInfo(path, top, head, branch, not same_path(git_dir, common))
+    return WorktreeInfo(path, Path(top), head, None if branch == "HEAD" else branch,
+                        not same_path(git_dir, common))
 
 
 def _porcelain(path: Path) -> list[str]:
@@ -113,9 +121,10 @@ class Snapshot:
         return sorted({entry[3:] for entry in self.status if not entry.startswith("<- ")})
 
 
-def snapshot(path: Path, exclude: Path | None = None) -> Snapshot:
-    """``exclude``: a directory inside the worktree to ignore (the state root, if it lives there)."""
-    info = worktree_info(path)
+def snapshot(path: Path, exclude: Path | None = None, info: WorktreeInfo | None = None) -> Snapshot:
+    """``exclude``: a directory inside the worktree to ignore (the state root, if it lives there).
+    ``info``: a :func:`worktree_info` taken just before, to save the Git calls; omitted, it is read here."""
+    info = info or worktree_info(path)
     status = _porcelain(path)
     if exclude is not None:
         try:
@@ -181,8 +190,7 @@ def commit_all(path: Path, message_file: Path, expected_parent: str, exclude: Pa
             pass
     git(path, "add", "-A", "--", *pathspec)
     git(path, "commit", "-q", "-F", str(message_file))
-    head = git(path, "rev-parse", "--verify", "HEAD").strip()
-    parent = git(path, "rev-parse", "--verify", "HEAD^").strip()
+    head, parent = (git(path, "rev-parse", "HEAD", "HEAD^").split() + ["", ""])[:2]
     if parent != expected_parent:
         raise GitError(f"new commit {head} has parent {parent}, expected {expected_parent}")
     return head

@@ -180,6 +180,41 @@ def no_acks_anywhere(env):
     return not list(env.root.path.rglob("ack-*.md"))
 
 
+def _count_git_processes(monkeypatch):
+    from multi_agent_ai.workers import gitops
+
+    calls = []
+    real = subprocess.run
+
+    def counting(cmd, *args, **kwargs):
+        if isinstance(cmd, (list, tuple)) and cmd and Path(str(cmd[0])).stem.lower() == "git":
+            calls.append(list(cmd[1:]))
+        return real(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(gitops.subprocess, "run", counting)
+    return calls
+
+
+def test_a_review_run_uses_few_git_processes(env, monkeypatch):
+    """T32: about 27 Git processes per run_worker used to be spent re-asking the same questions (T30 measurement)."""
+    env.install("codex")
+    env.configure(stdout=CODEX_OK, final=FINAL)
+    calls = _count_git_processes(monkeypatch)
+    outcome = env.run()
+    assert outcome.failure_class is None, outcome.result
+    assert len(calls) <= 8, calls  # measured 8 (was about 27): worktree facts 1, snapshots 2 + 3, primary HEAD 2
+    assert sum(1 for c in calls if c[:1] == ["rev-parse"] and "--show-toplevel" in c) <= 2
+
+
+def test_an_implement_run_uses_few_git_processes(env, monkeypatch):
+    env.install("codex")
+    env.configure(stdout=CODEX_OK, final="done", write={"src/widget.py": "x = 1\n"})
+    calls = _count_git_processes(monkeypatch)
+    outcome = env.run(mode="implement")
+    assert outcome.failure_class is None, outcome.result
+    assert len(calls) <= 11, calls  # measured 11
+
+
 # --- review mode -------------------------------------------------------------------------------
 
 
