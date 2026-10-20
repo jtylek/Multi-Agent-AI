@@ -70,6 +70,8 @@ class WorkerRequest:
     verify_command: str | None = None
     max_budget_usd: float | None = None
     """Per-attempt spending cap; only the Claude adapter has one (off by default)."""
+    feedback: str | None = None
+    """Correction-round text from the orchestrator (T27); capped and scrubbed by the prompt builder."""
 
 
 @dataclass
@@ -339,7 +341,7 @@ def run_worker(
     board = task_dir / "plan.md"
     prompt = build_prompt(plan=plan, subtask=subtask, agent_id=req.agent_id, provider=req.provider,
                           mode=req.mode, worktree=req.worktree, branch=info.branch, board_path=board,
-                          commit=commit)
+                          commit=commit, feedback=req.feedback)
     prompt_path = run.run_dir / "prompt.md"
     atomic_write(prompt_path, prompt)
     run.result["prompt_sha256"] = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
@@ -534,7 +536,8 @@ def preview_worker(
             problems.append(f"commit to review not found: {exc}")
     prompt = build_prompt(plan=plan, subtask=subtask, agent_id=req.agent_id, provider=req.provider,
                           mode=req.mode, worktree=req.worktree, branch=info.branch,
-                          board_path=req.state_root.tasks / req.task_id / "plan.md", commit=commit)
+                          board_path=req.state_root.tasks / req.task_id / "plan.md", commit=commit,
+                          feedback=req.feedback)
     preview["prompt_sha256"] = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     preview["verify_command"] = verify
     # the paths below are never created in a dry run; adapters only build argv from them
