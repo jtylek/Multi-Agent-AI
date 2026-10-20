@@ -134,10 +134,11 @@ listed below is planned, not implemented.
 
 ## Not implemented
 
-Review-file parsing; message cleanup and
-bounded watches (formats.md section 7); OS-level isolation of
-workers (filesystem/network); creating worktrees; verification and routing; VS Code
-integration.
+Message cleanup and bounded watches (formats.md section 7); OS-level isolation of
+workers (filesystem/network); adaptive routing and the performance ledger; VS Code
+integration; the demo job generator (T31, still on its branch awaiting fixes); the faster test
+suite (T30, awaiting review). Worktree creation (T23), verification (T26) and the job driver (T27)
+are implemented, see above; no real provider run has been made through them.
 
 Unverified until the first real run (Copilot, T28): the Windows name of the shell tool for
 `--available-tools` (`SHELL_TOOL = "powershell"` is a guess; `bash` was rejected as nonexistent in

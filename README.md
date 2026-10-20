@@ -6,7 +6,7 @@ Multi-Agent AI is an open-source project to coordinate **OpenAI Codex CLI, Anthr
 
 The primary development environment is **Windows 10/11 with Visual Studio Code**. The orchestrator is intended to work with existing CLI authentication and local repositories, without requiring WSL or Docker. It is project-neutral: any Git repository can be a target, with project-specific settings kept in a project profile.
 
-> **Project status:** Early design / bootstrap. This README describes the target architecture, not a finished or tested product. Agent execution, routing, messaging bridges, and the VS Code integration remain to be implemented.
+> **Project status:** Early development, currently **on hold** (since 2026-10-20). The command-line engine exists and is tested with fake provider executables: coordination files and mailbox, managed Codex, Copilot and Claude workers, a worktree manager, a verification engine and a job driver. **No real provider run has completed through the job driver yet**, so treat it as unproven. Adaptive routing, the performance ledger and the VS Code integration are not implemented. See [docs/implementation-status.md](docs/implementation-status.md) for what works, and [docs/problems.md](docs/problems.md) for known problems and the state to resume from. The rest of this README describes the target architecture.
 
 ## Goals
 
@@ -230,17 +230,34 @@ Next: the [protocol](docs/protocol/agent-messaging.md) explains messages and joi
 
 ## Current implementation
 
-The first package (milestone M0) implements the protocol/state foundation plus read-only
-reachability, dry-run-by-default mailbox-pointer notification and managed headless workers:
-typed models, a parser and writer for the coordination files in
-[docs/protocol/formats.md](docs/protocol/formats.md), a configurable state root with a derived
-SQLite index, and a small CLI. It needs Python 3.11+ and uses only the standard library at
-runtime. `notify` only sends when explicitly invoked with `--send`; without it, the command
-prints the intended transport and performs no external action. It can also launch one **managed
-headless worker** (`codex exec`, `copilot -p` or `claude -p`) for a plan subtask with least-privilege
-profiles, classify the outcome, and record status, review and attempt data; this has been tested
-with fake executables only. Routing, the registry and the VS Code integration are not
-implemented yet; see [docs/implementation-status.md](docs/implementation-status.md).
+The package `multi_agent_ai` implements, as a command-line tool for Python 3.11+ (standard library
+only at runtime):
+
+- **Foundation (M0):** typed models, a parser and writer for the coordination files in
+  [docs/protocol/formats.md](docs/protocol/formats.md), a configurable state root with a derived
+  SQLite index, the durable mailbox and task board, read-only reachability discovery, and `notify`
+  (sends only with explicit `--send`; it prints the intended transport otherwise).
+- **Managed workers:** `worker run` launches one headless worker (`codex exec`, `copilot -p` or
+  `claude -p`) for a plan subtask with least-privilege tool profiles, classifies the outcome, and
+  records status, review and attempt data. Dry run by default.
+- **Worktree manager:** `workspace` creates an integration branch and one branch plus worktree per
+  subtask, detects dirty or locked trees, refuses protected branches, and integrates reviewed work
+  in dependency order. Dry run unless `--execute`.
+- **Verification engine:** `verify` runs the plan's exact verification command in a worktree and
+  records the evidence.
+- **Job driver:** `job plan | start | status | report | resume | cancel` runs a plan with concurrent
+  workers, a cross-provider review, one feedback round, orchestrator verification and integration
+  in dependency order, then stops at `awaiting_approval`. It never merges into your branch or pushes;
+  real provider runs need `--execute` and `--approved-provider-run`. It survives a crash: an attempt
+  without an end is reconciled and never rerun silently.
+- **Demo generator:** `tools/make_demo_job.py` builds a disposable project for trying the job driver
+  (still being fixed after review; not on `main`).
+
+All of this is tested with fake executables and temporary Git repositories. Known limits: a Copilot
+worker behind the npm `.cmd` shim fails with `invalid_arguments` on Windows, so use Codex or Claude for
+real runs; the Windows shell-tool names for Copilot and Claude are unverified. Routing, the usage ledger
+beyond attempt records, and the VS Code integration are not implemented. See
+[docs/implementation-status.md](docs/implementation-status.md).
 
 ```powershell
 py -3.12 -m venv .venv
@@ -272,7 +289,7 @@ Use `multi-agent-ai registry --state-root <path>` to inspect registered agents, 
 The order follows decision D15 and [docs/next-milestone.md](docs/next-milestone.md).
 
 - **M0 — Foundation (done):** protocol and file formats, typed models, mailbox, task board, state root and derived SQLite index, CLI, reachability discovery, notification transport, Windows process runtime, managed Codex and Copilot workers with failure classification and usage-limit handling. Tested with fake executables only.
-- **M1 — Real multi-agent execution (current):** agent registry and reservation enforcement, worktree lifecycle manager, Claude managed-worker adapter, real-provider smoke tests, an orchestrator-owned verification engine, and one end-to-end job with concurrent workers, cross-agent review and dependency-ordered integration.
+- **M1 — Real multi-agent execution (in progress, on hold):** agent registry and reservation enforcement, worktree lifecycle manager, Claude managed-worker adapter, an orchestrator-owned verification engine, and a job driver with concurrent workers, cross-agent review and dependency-ordered integration are built and tested with fakes. Still open: real-provider smoke tests and one proven end-to-end real job, the demo generator, and the faster test suite (T30).
 - **M2 — Adaptive routing and cost optimization:** usage ledger, cost/reliability scoring, escalation policies, provider health.
 - **M3 — VS Code UX:** task board, chat/job handoff, progress, review, and approval controls.
 
