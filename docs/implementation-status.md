@@ -82,7 +82,10 @@ listed below is planned, not implemented.
   runner's `result.json` (never reruns them; a lost attempt becomes `stale`), accepts a revised plan, and
   `--retry SUBTASK` is the only way to run a failed subtask again. Tested with injected fake workers in
   temporary Git repositories only; no real provider run. Per-phase job states (reviewing, verifying) are not
-  shown at job level yet; `job approve` does not exist (the user merges with Git).
+  shown at job level yet; `job approve` does not exist (the user merges with Git). Known limits: a Copilot worker behind the npm `.cmd` shim ends `invalid_arguments` (T12 rule), so a job that picks
+  Copilot halts at its first launch on a machine where Copilot resolves to the shim; independent subtasks are integrated
+  in completion order; the event log is re-read on every append (O(n^2), TODO); a live driver is never taken over
+  automatically (`job resume --force-takeover` is explicit).
 - CLI `worker run --provider codex|copilot --task T --subtask S --agent-id ID --mode
   review|implement --worktree ABS [--model M] [--timeout S] [--commit SHA]
   [--verify-command C] [--live-branch B]... [--pass-env NAME]... [--execute]`: one managed

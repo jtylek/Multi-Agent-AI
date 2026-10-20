@@ -59,18 +59,60 @@ def test_lock_of_a_dead_process_is_taken_over(tmp_path):
     assert taken and "not running" in taken
 
 
-def test_lock_with_an_old_heartbeat_is_taken_over_but_a_fresh_one_is_not(tmp_path):
+def test_a_live_process_with_an_old_heartbeat_needs_an_explicit_force(tmp_path):
     import os
     old = (datetime.now() - timedelta(seconds=jr.STALE_LOCK_SECONDS + 60)).isoformat()
     (tmp_path / jr.LOCK_FILE).write_text(json.dumps({"pid": os.getpid(), "heartbeat": old}), encoding="utf-8")
-    assert "no heartbeat since" in jr.DriverLock(tmp_path).acquire()
-    with pytest.raises(jb.JobError):
-        jr.DriverLock(tmp_path).acquire()  # now fresh, same live pid
+    with pytest.raises(jb.JobError, match="--force-takeover"):
+        jr.DriverLock(tmp_path).acquire()
+    assert "forced takeover" in jr.DriverLock(tmp_path).acquire(force=True)
+    with pytest.raises(jb.JobError, match="two drivers"):
+        jr.DriverLock(tmp_path).acquire(force=True)  # now fresh: even force does not steal a live, beating lock
 
 
-def test_lock_with_an_unreadable_file_is_stale(tmp_path):
-    (tmp_path / jr.LOCK_FILE).write_text("{not json", encoding="utf-8")
+def test_lock_with_an_unreadable_old_file_is_stale_but_a_brand_new_one_is_being_created(tmp_path):
+    import os
+    path = tmp_path / jr.LOCK_FILE
+    path.write_text("", encoding="utf-8")  # between O_EXCL create and write (C4)
+    with pytest.raises(jb.JobError, match="being created"):
+        jr.DriverLock(tmp_path).acquire()
+    os.utime(path, (time.time() - 60, time.time() - 60))
     assert "unreadable" in jr.DriverLock(tmp_path).acquire()
+
+
+def test_stale_takeover_race_has_exactly_one_winner(tmp_path):
+    for round_ in range(40):
+        directory = tmp_path / f"r{round_}"
+        directory.mkdir()
+        (directory / jr.LOCK_FILE).write_text(json.dumps({"pid": 2_000_000_000, "heartbeat": datetime.now().isoformat()}),
+                                              encoding="utf-8")
+        barrier, results = threading.Barrier(2), []
+
+        def contender():
+            lock = jr.DriverLock(directory)
+            barrier.wait()
+            try:
+                lock.acquire()
+                results.append("got")
+            except jb.JobError:
+                results.append("refused")
+        threads = [threading.Thread(target=contender) for _ in range(2)]
+        [x.start() for x in threads]
+        [x.join() for x in threads]
+        assert results.count("got") == 1, (round_, results)
+
+
+def test_the_heartbeat_thread_keeps_the_lock_fresh_during_a_long_call(world):
+    seen = []
+    lock_file = jb.job_dir(world.state, JOB) / jr.LOCK_FILE
+
+    def slow_suite(cancel):
+        seen.append(json.loads(lock_file.read_text(encoding="utf-8"))["heartbeat"])
+        time.sleep(0.6)  # no driver-loop activity meanwhile: only the timer thread can beat
+        seen.append(json.loads(lock_file.read_text(encoding="utf-8"))["heartbeat"])
+    world.verify_hook["full-suite"] = slow_suite
+    assert start(world).state == "awaiting_approval"
+    assert seen[0] != seen[1]
 
 
 def test_two_drivers_on_one_job_are_refused(world):
@@ -255,3 +297,76 @@ def test_cli_resume_and_cancel_are_dry_runs_by_default(world, capsys, monkeypatc
     assert called and called[0]["retry"] == ("A",)
     assert main(["job", "cancel", *base, "--execute"]) == 0
     assert jb.load_job(world.state, JOB)[0].state == "cancelled"
+
+
+# --- cancel reaches verification (C3) ----------------------------------------------------------------
+
+
+def test_cancel_stops_a_running_verification(world):
+    from multi_agent_ai.verify import VerificationResult
+    entered = threading.Event()
+    original = world.verify
+
+    def verify(worktree, spec, *, run_dir=None, environment=None, cancel=None):
+        if spec.commands[0].name == "A":
+            entered.set()
+            assert cancel is not None and cancel.wait(timeout=30)
+            run_dir.mkdir(parents=True, exist_ok=True)
+            return VerificationResult("cancelled", "", "", 0.1, str(run_dir))
+        return original(worktree, spec, run_dir=run_dir, environment=environment, cancel=cancel)
+    world.verify = verify
+    create(world)
+    result = {}
+    thread = threading.Thread(target=lambda: result.update(job=jr.run_job(
+        world.state, world.project, JOB, world.options, world.hooks())))
+    thread.start()
+    assert entered.wait(timeout=60)
+    jr.request_cancel(world.state, JOB, execute=True)
+    thread.join(timeout=60)
+    assert not thread.is_alive() and result["job"].state == "cancelled"
+    assert result["job"].subtasks["A"].state == "cancelled" and not world.launches_of("A", "review")
+
+
+def test_verify_kills_the_command_tree_when_cancelled(tmp_path):
+    import subprocess, sys, shutil
+    from multi_agent_ai import verify as verify_mod
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run([shutil.which("git"), "init", "-q"], cwd=repo, check=True)
+    cancel = threading.Event()
+    threading.Timer(1.5, cancel.set).start()
+    spec = verify_mod.VerificationSpec(commands=(verify_mod.CommandSpec((sys.executable, "-c", "import time; time.sleep(120)")),),
+                                       timeout=120)
+    started = time.monotonic()
+    result = verify_mod.verify(repo, spec, run_dir=tmp_path / "run", cancel=cancel)
+    assert result.status == "cancelled" and time.monotonic() - started < 30
+    assert result.commands[0].status == "cancelled"
+
+
+# --- a crashed review is retained and its worktree cleaned (C5) ------------------------------------
+
+
+def test_crash_during_a_review_is_retained_and_the_leftover_worktree_is_removed(world, monkeypatch):
+    original = world.worker
+
+    def worker(req):
+        if req.subtask_id == "A" and req.mode == "review":
+            raise SystemExit("power loss during the review")
+        return original(req)
+    world.worker = worker
+    monkeypatch.setattr(jr.Engine, "_remove_review_worktree", lambda self, path: None)  # a crash leaves it behind
+    create(world)
+    with pytest.raises(SystemExit):
+        jr.run_job(world.state, world.project, JOB, world.options, world.hooks())
+    leftovers = list(world.wt_root.glob("My Project-A-review*"))
+    assert leftovers
+    (jb.job_dir(world.state, JOB) / jr.LOCK_FILE).write_text(
+        json.dumps({"pid": 2_000_000_000, "heartbeat": datetime.now().isoformat()}), encoding="utf-8")
+    monkeypatch.undo()
+    world.worker = original
+    job = resume(world)
+    assert job.subtasks["A"].state == "failed" and "stale" in job.subtasks["A"].reason
+    assert ws.read_records(world.state, TASK)["A"].state == "retained"
+    assert not list(world.wt_root.glob("My Project-A-review*"))
+    final = resume(world, retry=("A",))
+    assert final.state == "awaiting_approval", (final.state, final.reason)

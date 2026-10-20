@@ -602,6 +602,8 @@ def build_report(job: JobState, warnings: Sequence[str] = ()) -> dict[str, Any]:
         "started": job.started, "updated": job.updated, "subtasks": subtasks, "integration": job.integration,
         "final_check": job.final_check, "not_verified": not_verified, "warnings": list(warnings),
         "next_steps": next_steps(job),
+        "notes": ["Independent subtasks are integrated in the order they finish (completion order), not in plan order; "
+                  "dependants are always integrated after their dependencies. A conflict is not caused by the plan order."],
     }
 
 
@@ -644,6 +646,8 @@ def format_report(report: Mapping[str, Any]) -> str:
         lines += ["## Not verified", ""] + [f"- {item}" for item in report["not_verified"]] + [""]
     if report["warnings"]:
         lines += ["## Warnings", ""] + [f"- {item}" for item in report["warnings"]] + [""]
+    if report.get("notes"):
+        lines += ["## Notes", ""] + [f"- {item}" for item in report["notes"]] + [""]
     if report["next_steps"]:
         lines += ["## Next steps (for the user)", ""] + [f"- {item}" for item in report["next_steps"]] + [""]
     return "\n".join(lines)

@@ -213,6 +213,12 @@ dry run unless `--execute`. Rules fixed by the coordinator's answers to the desi
 - Review files carry an orchestrator-written first header `status: agreed | changes requested | unparsed`
   (Accepted, coordinator, Q12): strict exact-line parse of the reviewer's `verdict:` line, `unparsed` blocks
   integration, formats.md section 9.
+- A dependency of a subtask that is not part of the job (its plan row is `done`/`merged`, or has `worktree: no`) counts as
+  satisfied, in the driver and in `workspace create`/`integrate` (`workspace.unmet_dependencies`). A subtask held back
+  because it overlaps another one forks from the integration tip once that one is integrated.
+- Known limits, not defects of the driver: a Copilot worker reached through the npm `.cmd` shim ends `invalid_arguments`
+  (the runner refuses awkward prompts through batch files, T12); independent subtasks are integrated in completion order
+  (the report says so); `append_event` re-reads the event file on every event (O(n^2), fine for the MVP, TODO).
 
 ## Open
 

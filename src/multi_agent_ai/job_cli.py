@@ -61,6 +61,9 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     resume.add_argument("--execute", action="store_true", help="really continue the job (default: dry run)")
     resume.add_argument("--retry", action="append", default=[], metavar="SUBTASK",
                         help="explicitly retry a failed, cancelled or stale subtask (resets its correction budget); repeatable")
+    resume.add_argument("--force-takeover", action="store_true",
+                        help="take the driver lock from a process that is alive but sent no heartbeat for 10 minutes "
+                             "(only if you are sure it is hung)")
     resume.add_argument("--verify-command", action="append", default=[], help="override the full-suite command")
     resume.add_argument("--approved-provider-run", action="store_true",
                         help="you were told the user approved this real provider run (a speed bump for agents, NOT a security control)")
@@ -126,7 +129,8 @@ def main(args: argparse.Namespace) -> int:
             from . import job_run
 
             final = job_run.resume_job(root, Path(args.project_root).resolve(), args.job, retry=tuple(args.retry),
-                                       verify_commands=tuple(args.verify_command))
+                                       verify_commands=tuple(args.verify_command),
+                                       force_takeover=args.force_takeover)
             print(json.dumps(final.as_dict(), indent=2, ensure_ascii=False) if args.json else jb.format_status(final))
             return 0 if final.state == "awaiting_approval" else 1
         if command == "cancel":

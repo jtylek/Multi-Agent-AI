@@ -371,6 +371,19 @@ def create_integration(project_root: Path, state: StateRoot, task_id: str, base_
                    "caller" if base_commit else "plan", protected, execute, allow_reuse=True)
 
 
+def unmet_dependencies(plan, subtask, merged: set[str]) -> list[str]:
+    """Dependencies of ``subtask`` not yet in the integration branch. A dependency counts as satisfied when this
+    manager merged it, or when the plan shows it needs no merge here: its row is already ``done``/``merged`` or has
+    no worktree (decision D19: dependencies outside the job's own subtasks never block it)."""
+    unmet = []
+    for dep in subtask.depends_on:
+        row = plan.subtask(dep)
+        if dep in merged or (row is not None and (row.state in ("done", "merged") or not row.worktree)):
+            continue
+        unmet.append(dep)
+    return unmet
+
+
 def create_subtask_worktree(project_root: Path, state: StateRoot, task_id: str, subtask_id: str,
                             base_from: str = "auto", worktrees_root: Path | None = None,
                             protected: Sequence[str] = DEFAULT_PROTECTED, execute: bool = False) -> CreateResult:
@@ -386,7 +399,7 @@ def create_subtask_worktree(project_root: Path, state: StateRoot, task_id: str, 
     dependants = bool(subtask.depends_on)
     source = base_from if base_from != "auto" else ("integration" if dependants else "base")
     if dependants:
-        unmet = [d for d in subtask.depends_on if records.get(d, WorktreeRecord(d, "", "", "", "")).state != "merged"]
+        unmet = unmet_dependencies(plan, subtask, {k for k, v in records.items() if v.state == "merged"})
         if unmet:
             raise WorkspaceError("dependency_unmet", f"{subtask_id} depends on {', '.join(unmet)}, not merged into the "
                                                      "integration branch yet")
@@ -544,7 +557,7 @@ def integrate(project_root: Path, state: StateRoot, task_id: str, order: Sequenc
             elif tip is None:
                 problem = ("not_a_worktree", f"branch task/{task_id}/{item.subtask} does not exist")
             else:
-                unmet = [d for d in sub.depends_on if d not in merged_here]
+                unmet = unmet_dependencies(plan, sub, merged_here)
                 if unmet:
                     problem = ("dependency_unmet", f"depends on {', '.join(unmet)}, not merged yet")
                 elif (why := _reviewed(state, task_id, sub, tip)):

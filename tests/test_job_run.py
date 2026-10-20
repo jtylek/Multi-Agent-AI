@@ -78,6 +78,8 @@ class World:
         self.barrier: threading.Barrier | None = None
         self.verify_calls: list[tuple[str, Path]] = []
         self.verify_fail: dict[str, int] = {}
+        self.verify_hook: dict[str, object] = {}
+        """verification name -> callable(cancel) run inside the fake verify (may block or record)"""
 
     def put_plan(self, rows, revision):
         body = "## Goal\n\nAdd multiply and divide.\n\n## Subtasks\n\n" + render_subtask_table(rows) + VERIFY
@@ -123,6 +125,7 @@ class World:
                 return WorkerOutcome(req.agent_id, None, 0, run_dir, {"usage": {"output_tokens": 7}, "duration_seconds": 0.1},
                                      commit=sha)
             if isinstance(behaviour, tuple) and behaviour[0] == "modify":
+                (req.worktree / "junk.txt").write_text("the reviewer edited this", encoding="utf-8")
                 return WorkerOutcome(req.agent_id, F.REVIEW_MODIFIED_FILES, 0, run_dir, {})
             verdict = behaviour[1] if isinstance(behaviour, tuple) and behaviour[0] == "verdict" else "agreed"
             sha = git(req.worktree, "rev-parse", "HEAD")
@@ -135,8 +138,10 @@ class World:
             with self.lock:
                 self.active -= 1
 
-    def verify(self, worktree, spec, *, run_dir=None, environment=None):
+    def verify(self, worktree, spec, *, run_dir=None, environment=None, cancel=None):
         name = spec.commands[0].name
+        if name in self.verify_hook:
+            self.verify_hook[name](cancel)
         with self.lock:
             self.verify_calls.append((name, Path(worktree)))
             left = self.verify_fail.get(name, 0)
@@ -153,7 +158,7 @@ class World:
         return VerificationResult("passed", "", "", 0.1, str(run_dir))
 
     def hooks(self):
-        return jr.Hooks(worker=self.worker, verify=self.verify, available=lambda name: True, poll_seconds=0.05)
+        return jr.Hooks(worker=self.worker, verify=self.verify, available=lambda name: True, poll_seconds=0.05, retry_seconds=0.01, heartbeat_seconds=0.05)
 
     def run(self, options=None):
         options = options or self.options
@@ -400,3 +405,125 @@ def test_a_crash_inside_integration_leaves_a_start_event_and_no_result(world, mo
     events, _ = jb.read_events(jb.job_dir(world.state, "demo-20261020-030000") / jb.EVENTS_FILE)
     kinds = [e["kind"] for e in events]
     assert "integration_started" in kinds and "integration" not in kinds
+
+
+# --- fixes from the claude-50 review (B1-B7) ----------------------------------------------------------
+
+
+def test_b1_a_subtask_held_back_for_an_overlap_forks_from_the_integration_tip(tmp_path):
+    rows = (Subtask("A", "x", "src/calc.py", (), True, "codex-1", "waived", "open"),
+            Subtask("B", "y", "src/calc.py", (), True, "copilot-1", "waived", "open"))
+    w = World(tmp_path, rows=rows)
+    w.put_plan(rows, 3)
+    seen = {}
+    w.script[("B", "implement", 1)] = lambda req: seen.update(has_a=(req.worktree / "A.txt").is_file())
+    job = w.run()
+    assert job.state == "awaiting_approval" and seen == {"has_a": True}
+    assert ws.read_records(w.state, TASK)["B"].base_from == "integration"
+    assert w.max_active == 1
+
+
+def test_b2_dependencies_that_are_not_part_of_the_job_count_as_satisfied(tmp_path):
+    rows = (Subtask("D", "already merged earlier", "old.txt", (), True, "codex-1", "waived", "done"),
+            Subtask("N", "docs only", "docs/", (), False, "codex-1", "waived", "open"),
+            Subtask("A", "needs D and N", "src/a.py", ("D", "N"), True, "codex-1", "waived", "open"))
+    w = World(tmp_path, rows=rows)
+    w.put_plan(rows, 3)
+    job = w.run()
+    assert job.state == "awaiting_approval", (job.state, job.reason)
+    assert job.subtasks["A"].state == "integrated"
+
+
+def test_b3_a_locked_workspace_is_retried_then_integration_failure_is_logged_and_resumable(world, monkeypatch):
+    real = ws.integrate
+    calls = {"n": 0}
+
+    def locked_twice(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise ws.WorkspaceError("locked", "another workspace operation is running")
+        return real(*a, **kw)
+    monkeypatch.setattr(ws, "integrate", locked_twice)
+    assert world.run().state == "awaiting_approval" and calls["n"] >= 5  # two retries, then normal
+
+
+def test_b3_permanent_failure_rests_paused_with_an_event_and_a_resume_heals(tmp_path, monkeypatch):
+    w = World(tmp_path)
+    real = ws.integrate
+    state = {"fail": True}
+
+    def failing(project, st, task, order, *a, **kw):
+        if state["fail"] and order == ["A"]:
+            raise ws.WorkspaceError("primary_changed", "the primary checkout changed during the operation")
+        return real(project, st, task, order, *a, **kw)
+    monkeypatch.setattr(ws, "integrate", failing)
+    job = w.run()
+    assert job.state == "paused_user" and "primary_changed" in job.reason and job.subtasks["A"].state == "reviewed"
+    events, _ = jb.read_events(jb.job_dir(w.state, "demo-20261020-030000") / jb.EVENTS_FILE)
+    assert any(e["kind"] == "integration_failed" and e["code"] == "primary_changed" for e in events)
+    state["fail"] = False
+    from multi_agent_ai import job_run as run_mod
+    final = run_mod.resume_job(w.state, w.project, "demo-20261020-030000", hooks=w.hooks())
+    assert final.state == "awaiting_approval" and len(w.launches_of("A", "implement")) == 1
+
+
+def test_b3_a_missing_integration_record_at_the_end_pauses_instead_of_crashing(world, monkeypatch):
+    real = ws.integrate
+
+    def integrate_then_drop_record(project, st, task, order, *a, **kw):
+        report = real(project, st, task, order, *a, **kw)
+        if order == ["C"]:
+            records = ws.read_records(st, task)
+            records["integration"].state = "removed"
+            ws._write_records(st, task, records)
+        return report
+    monkeypatch.setattr(ws, "integrate", integrate_then_drop_record)
+    job = world.run()
+    assert job.state == "paused_user" and "integration worktree" in job.reason
+
+
+def test_b4_a_leftover_review_worktree_does_not_block_the_review(world):
+    leftover = world.wt_root / "My Project-A-review1-030000"
+    world.wt_root.mkdir(parents=True, exist_ok=True)
+    git(world.project, "worktree", "add", "--detach", str(leftover), world.base)  # registered leftover
+    plain = world.wt_root / "My Project-B-review1-030000"
+    plain.mkdir()
+    (plain / "junk").write_text("half-created", encoding="utf-8")  # unregistered leftover directory
+    job = world.run()
+    assert job.state == "awaiting_approval", (job.state, job.reason)
+    assert not leftover.exists() and not plain.exists()
+
+
+def test_b5_what_a_reviewer_changed_is_saved_before_the_worktree_is_removed(world):
+    world.script[("A", "review", 1)] = ("modify",)
+    world.run()
+    evidence = list((jb.job_dir(world.state, "demo-20261020-030000") / "review-evidence").glob("*/status.txt"))
+    assert evidence and "junk.txt" in evidence[0].read_text(encoding="utf-8")
+    assert (evidence[0].parent / "diff.patch").is_file()
+
+
+def test_b7_a_transient_record_read_error_is_retried(world, monkeypatch):
+    real = ws.preflight_for_execution
+    calls = {"n": 0}
+
+    def flaky(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ws.WorkspaceError("git_failed", "workspaces.json is unreadable: sharing violation")
+        return real(*a, **kw)
+    monkeypatch.setattr(ws, "preflight_for_execution", flaky)
+    assert world.run().state == "awaiting_approval"
+
+
+def test_b8_the_report_says_independent_subtasks_are_integrated_in_completion_order(world):
+    job = world.run()
+    assert any("completion order" in n for n in jb.build_report(job)["notes"])
+
+
+def test_unmet_dependencies_helper():
+    plan = Plan(TASK, "lead", 1, "2026-10-20 10:00", "", subtasks=(
+        Subtask("D", "d", "d", (), True, "x", "waived", "done"), Subtask("N", "n", "n", (), False, "x", "waived", "open"),
+        Subtask("O", "o", "o", (), True, "x", "waived", "open"), Subtask("A", "a", "a", ("D", "N", "O", "Z"), True, "x", "waived", "open")))
+    a = plan.subtask("A")
+    assert ws.unmet_dependencies(plan, a, set()) == ["O", "Z"]
+    assert ws.unmet_dependencies(plan, a, {"O", "Z"}) == []

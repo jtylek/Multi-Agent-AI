@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import threading
+import uuid
 import time
 from collections.abc import Callable, Mapping
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
@@ -41,6 +43,8 @@ OK, FAILED, HALT = "ok", "failed", "halt"
 CANCEL_MARKER = "cancel.requested"
 LOCK_FILE = "driver.lock"
 HEARTBEAT_SECONDS = 30.0
+BEING_CREATED_SECONDS = 5.0
+RETRIES = 3
 STALE_LOCK_SECONDS = 600.0
 STALE = "stale"
 
@@ -54,6 +58,9 @@ class Hooks:
     available: Callable[[str], bool] = jb.provider_available
     env: Mapping[str, str] | None = None
     poll_seconds: float = 1.0
+    retry_seconds: float = 0.5
+    """Pause between retries of a locked or briefly unreadable workspace record."""
+    heartbeat_seconds: float = HEARTBEAT_SECONDS
 
 
 @dataclass
@@ -123,14 +130,15 @@ class Engine:
         self.cancel = threading.Event()
         self.start_at: dict[str, str] = {}
         """Resume points: subtask -> ``verify`` or ``integrate`` (everything else starts at implement)."""
-        self.lock: DriverLock | None = None
-        self._beat = 0.0
 
     # --- the loop (driver thread) -------------------------------------------------------------
 
     def run(self) -> jb.JobState:
         self.rec.emit("job_state", state="preparing")
-        records = ws.read_records(self.state, self.plan.task_id)
+        try:
+            records = self._retrying(ws.read_records, self.state, self.plan.task_id)
+        except ws.WorkspaceError as exc:
+            return self._rest("paused_user", f"workspace record: {exc.code}: {exc.message}")
         known = records.get(ws.INTEGRATION)
         if known is None or known.state == "removed" or not Path(known.path).is_dir():  # a resumed job reuses it
             try:
@@ -138,7 +146,7 @@ class Engine:
                                       self.protected, execute=True)
             except ws.WorkspaceError as exc:
                 return self._rest("paused_user", f"integration branch: {exc.code}: {exc.message}")
-            records = ws.read_records(self.state, self.plan.task_id)
+            records = self._retrying(ws.read_records, self.state, self.plan.task_id)
         for sid in self.planned:
             if self.job.subtasks[sid].state not in ("pending", "blocked_by") and sid in records:
                 self.paths[sid] = Path(records[sid].path)
@@ -151,7 +159,6 @@ class Engine:
             for sid in resumed:  # reconciled subtasks continue where they stopped
                 running[pool.submit(self._pipeline, sid)] = sid
             while True:
-                self._heartbeat()
                 halt = halt or self._cancelled() or self._plan_changed()
                 if halt is None:
                     halt = self._start_ready(pending, running, pool)
@@ -171,10 +178,16 @@ class Engine:
                     halt = self._finish_subtask(sid, result) or halt
         return self._conclude(halt)
 
-    def _heartbeat(self) -> None:
-        if self.lock is not None and time.monotonic() - self._beat >= HEARTBEAT_SECONDS:
-            self.lock.beat()
-            self._beat = time.monotonic()
+    def _retrying(self, fn: Callable[..., Any], *args: Any, codes: tuple[str, ...] = ("git_failed", "locked"), **kw: Any) -> Any:
+        """Call a workspace function, retrying a few times on transient errors (a held workspace lock, a record
+        file another process has open for a moment)."""
+        for attempt in range(RETRIES):
+            try:
+                return fn(*args, **kw)
+            except ws.WorkspaceError as exc:
+                if exc.code not in codes or attempt == RETRIES - 1:
+                    raise
+                time.sleep(self.hooks.retry_seconds)
 
     def _plan_changed(self) -> tuple[str, str] | None:
         parsed = read_plan(self.state.tasks / self.plan.task_id)
@@ -203,10 +216,18 @@ class Engine:
                 continue
             if any(jb.areas_overlap(self.planned[sid].files, self.planned[r].files) for r in running.values()):
                 continue  # overlapping files/area: one after the other
-            record = ws.read_records(self.state, self.plan.task_id).get(sid)
+            try:
+                record = self._retrying(ws.read_records, self.state, self.plan.task_id).get(sid)
+            except ws.WorkspaceError as exc:
+                return "paused_user", f"workspace record: {exc.code}: {exc.message}"
             if record is None or record.state == "removed" or not Path(record.path).is_dir():
+                # a subtask that was held back for an overlapping one must see that one's merged work (B1)
+                after_overlap = any(self.job.subtasks[o].state == "integrated" and
+                                    jb.areas_overlap(self.planned[sid].files, self.planned[o].files)
+                                    for o in self.planned if o != sid)
                 try:
-                    record = ws.create_subtask_worktree(self.project, self.state, self.plan.task_id, sid, "auto",
+                    record = ws.create_subtask_worktree(self.project, self.state, self.plan.task_id, sid,
+                                                        "integration" if after_overlap else "auto",
                                                         self.worktrees_root, self.protected, execute=True).record
                 except ws.WorkspaceError as exc:
                     pending.remove(sid)
@@ -226,7 +247,13 @@ class Engine:
             return "cancelled", "cancel requested"
         if result.status == OK:
             self.rec.emit("integration_started", subtask=sid, tip=result.tip)  # logged before the action (design 3)
-            report = ws.integrate(self.project, self.state, self.plan.task_id, [sid], self.protected, execute=True)
+            try:
+                report = self._retrying(ws.integrate, self.project, self.state, self.plan.task_id, [sid], self.protected,
+                                        execute=True, codes=("locked",))
+            except ws.WorkspaceError as exc:
+                # the subtask stays `reviewed`, so a resume integrates it (an already merged tip is `already_merged`)
+                self.rec.emit("integration_failed", subtask=sid, code=exc.code, detail=exc.message[:300])
+                return "paused_user", f"{sid}: integration {exc.code}: {exc.message}"[:500]
             item = report.items[0]
             self.rec.emit("integration", subtask=sid, result=item.result, code=item.code, detail=item.detail,
                           tip=report.tip, merge_commit=item.merge_commit, commit=item.commit)
@@ -259,14 +286,21 @@ class Engine:
         if bad:
             return self._rest("failed", f"not integrated: {', '.join(bad)} (see the report for evidence)")
         self.rec.emit("job_state", state="final_check")
-        integration = ws.read_records(self.state, self.plan.task_id).get(ws.INTEGRATION)
+        try:
+            integration = self._retrying(ws.read_records, self.state, self.plan.task_id).get(ws.INTEGRATION)
+        except ws.WorkspaceError as exc:
+            return self._rest("paused_user", f"workspace record: {exc.code}: {exc.message}")
+        if integration is None or integration.state == "removed" or not Path(integration.path).is_dir():
+            return self._rest("paused_user", "the integration worktree is missing from the workspace record")
         commands = tuple(verify_mod.CommandSpec(verify_mod.parse_command(c), name="full-suite")
                          for c in self.options.verify_commands)
         run_dir = self.rec.dir / "final-check"
         result = self.hooks.verify(Path(integration.path), verify_mod.VerificationSpec(commands=commands, expected_clean=True),
-                                   run_dir=run_dir)
+                                   run_dir=run_dir, cancel=self.cancel)
         self.rec.emit("final_check", status=result.status, run_dir=str(run_dir), error=result.error,
                       commands=[{"argv": c.argv, "status": c.status, "exit_code": c.exit_code} for c in result.commands])
+        if result.status == "cancelled":
+            return self._rest("cancelled", "cancel requested during the full suite")
         if not result.ok:
             return self._rest("failed", f"the full suite on the integration branch did not pass ({result.status})")
         return self._rest("awaiting_approval", None)
@@ -289,7 +323,8 @@ class Engine:
                 return SubtaskResult(HALT, F.CANCELLED, "cancel requested", halt_state="cancelled")
             if stage == "implement":
                 try:
-                    ws.preflight_for_execution(self.project, self.state, self.plan.task_id, sid, self.protected)
+                    self._retrying(ws.preflight_for_execution, self.project, self.state, self.plan.task_id, sid,
+                                   self.protected, codes=("git_failed",))
                 except ws.WorkspaceError as exc:
                     return SubtaskResult(HALT, exc.code, exc.message)
                 self.rec.emit("subtask_state", subtask=sid, state="implementing")
@@ -396,7 +431,7 @@ class Engine:
             spec = verify_mod.VerificationSpec(
                 commands=(verify_mod.CommandSpec(verify_mod.parse_command(command), name=sid),),
                 expected_commit=tip, expected_clean=True)
-            result = self.hooks.verify(worktree, spec, run_dir=run_dir)
+            result = self.hooks.verify(worktree, spec, run_dir=run_dir, cancel=self.cancel)
         except (ValueError, TypeError) as exc:
             self.rec.emit("subtask_state", subtask=sid, state="verification_failed", reason=str(exc)[:300])
             return "environment_error", str(exc)
@@ -405,6 +440,8 @@ class Engine:
                                                            "error": result.error}})
         if result.ok:
             return None
+        if result.status == "cancelled":
+            return F.CANCELLED, "cancel requested during verification"
         return result.status, self._failure_text(result, run_dir)
 
     @staticmethod
@@ -474,15 +511,46 @@ class Engine:
     def _review_worktree(self, sid: str, sha: str, number: int) -> Path:
         path = self._review_root() / f"{self.project.name}-{sid}-review{number}-{self.job.job_id[-6:]}"
         path.parent.mkdir(parents=True, exist_ok=True)
-        gitops.git(self.project, "worktree", "add", "--detach", str(path), sha)
+        self._discard_review_worktree(path)  # a leftover of a crashed driver would block `worktree add` (B4)
+        try:
+            gitops.git(self.project, "worktree", "add", "--detach", str(path), sha)
+        except gitops.GitError:
+            shutil.rmtree(path, ignore_errors=True)  # a half-created directory
+            gitops.git(self.project, "worktree", "prune", check=False)
+            raise
         return path
 
+    def _discard_review_worktree(self, path: Path) -> bool:
+        """Remove a throwaway review checkout this driver owns (``--force`` is for this path only): the
+        registered worktree, a plain leftover directory and any stale registration."""
+        gitops.git(self.project, "worktree", "remove", "--force", str(path), check=False)
+        if path.exists():
+            shutil.rmtree(path, ignore_errors=True)
+        gitops.git(self.project, "worktree", "prune", check=False)
+        return not path.exists()
+
     def _remove_review_worktree(self, path: Path) -> None:
-        """Throwaway detached checkout owned by this driver; ``--force`` is for this path only."""
+        """Throwaway detached checkout owned by this driver. If the reviewer changed anything, the status and
+        diff are saved first: that change is the evidence of ``review_modified_files`` (B5)."""
         try:
-            gitops.git(self.project, "worktree", "remove", "--force", str(path))
-        except gitops.GitError:
+            status = gitops.git(path, "status", "--porcelain", "--untracked-files=all", check=False).strip()
+            if status:
+                evidence = self.rec.dir / "review-evidence" / path.name
+                evidence.mkdir(parents=True, exist_ok=True)
+                atomic_write(evidence / "status.txt", status + "\n")
+                atomic_write(evidence / "diff.patch", gitops.git(path, "diff", "HEAD", check=False))
+                self.rec.emit("note", text=f"the reviewer changed the review worktree; status and diff saved in {evidence}")
+        except (gitops.GitError, OSError):
+            pass
+        if not self._discard_review_worktree(path):
             self.rec.emit("note", text=f"review worktree {path} could not be removed")
+
+    def cleanup_review_worktrees(self) -> None:
+        """Remove review checkouts a crashed driver of this job left behind (C5)."""
+        suffix = f"-{self.job.job_id[-6:]}"
+        root = self._review_root()
+        for entry in sorted(root.glob(f"{self.project.name}-*-review*{suffix}")) if root.is_dir() else []:
+            self._discard_review_worktree(entry)
 
 
 @dataclass
@@ -499,62 +567,109 @@ class Attempt:
 
 
 class DriverLock:
-    """``driver.lock``: created exclusively, holds pid and heartbeat. Stale when the process is gone or the
-    heartbeat is older than ``STALE_LOCK_SECONDS``; a stale lock is taken over and the takeover is logged."""
+    """``driver.lock``: created exclusively, holds pid and heartbeat.
+
+    A lock whose process is gone (or whose content is unreadable and not brand new) is stale and is taken over by
+    renaming it to a unique name and checking that the renamed content is exactly what was judged stale, so two
+    contenders can never both win (C1). A live process with an old heartbeat is NOT taken over unless ``force``
+    is given: it may just be slow."""
 
     def __init__(self, directory: Path, clock: Callable[[], datetime] = datetime.now):
         self.path, self.clock = directory / LOCK_FILE, clock
         self.started = ""
 
-    def _info(self) -> dict[str, Any] | None:
+    def _raw(self) -> bytes | None:
         try:
-            value = json.loads(self.path.read_text(encoding="utf-8"))
-            return value if isinstance(value, dict) else None
-        except (OSError, ValueError):
+            return self.path.read_bytes()
+        except OSError:
             return None
 
-    def stale(self, info: dict[str, Any] | None) -> str | None:
-        """Why the lock may be taken over, or None when a live driver holds it."""
-        if info is None:
-            return "unreadable lock file"
-        pid = info.get("pid")
-        if not isinstance(pid, int) or not winproc.process_alive(pid):
-            return f"driver process {pid} is not running"
+    @staticmethod
+    def _parse(raw: bytes | None) -> dict[str, Any] | None:
         try:
-            beat = datetime.fromisoformat(str(info.get("heartbeat")))
+            value = json.loads(raw.decode("utf-8")) if raw else None
         except ValueError:
-            return "no valid heartbeat"
-        if (self.clock() - beat).total_seconds() > STALE_LOCK_SECONDS:
-            return f"no heartbeat since {info.get('heartbeat')}"
-        return None
+            return None
+        return value if isinstance(value, dict) else None
 
-    def acquire(self) -> str | None:
+    def _info(self) -> dict[str, Any] | None:
+        return self._parse(self._raw())
+
+    def heartbeat_age(self, info: dict[str, Any]) -> float | None:
+        try:
+            return (self.clock() - datetime.fromisoformat(str(info.get("heartbeat")))).total_seconds()
+        except ValueError:
+            return None
+
+    def alive(self, info: dict[str, Any] | None) -> bool:
+        pid = info.get("pid") if info else None
+        return isinstance(pid, int) and winproc.process_alive(pid)
+
+    def _judge(self, raw: bytes, force: bool) -> str:
+        """Why this lock may be taken over; raises JobError when it must not be."""
+        info = self._parse(raw)
+        if info is None:
+            try:
+                age = time.time() - self.path.stat().st_mtime
+            except OSError:
+                age = BEING_CREATED_SECONDS + 1
+            if age < BEING_CREATED_SECONDS:
+                raise jb.JobError("the driver lock is being created by another driver; try again in a moment")
+            return "unreadable lock file"
+        if not self.alive(info):
+            return f"driver process {info.get('pid')} is not running"
+        age = self.heartbeat_age(info)
+        if age is None or age > STALE_LOCK_SECONDS:
+            if force:
+                return f"forced takeover: process {info.get('pid')} is alive but sent no heartbeat since {info.get('heartbeat')}"
+            raise jb.JobError(f"job is held by process {info.get('pid')}, which is alive but sent no heartbeat since "
+                              f"{info.get('heartbeat')}; if you are sure it is hung, kill it or pass --force-takeover")
+        raise jb.JobError(f"job is being driven by process {info.get('pid')} (heartbeat {info.get('heartbeat')}); "
+                          "two drivers on one job are refused")
+
+    def acquire(self, force: bool = False) -> str | None:
         """Take the lock. Returns the reason when a stale lock was taken over."""
         taken = None
-        for _ in range(3):
+        for _ in range(6):
             try:
                 fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             except FileExistsError:
-                info = self._info()
-                why = self.stale(info)
-                if why is None:
-                    raise jb.JobError(f"job is being driven by process {info.get('pid')} (heartbeat {info.get('heartbeat')}); "
-                                      "two drivers on one job are refused")
-                taken = why
+                raw = self._raw()
+                if raw is None:
+                    continue  # it vanished: try to create it again
+                why = self._judge(raw, force)
+                victim = self.path.with_name(f"{LOCK_FILE}.taken-{os.getpid()}-{uuid.uuid4().hex[:8]}")
                 try:
-                    os.unlink(self.path)
-                except FileNotFoundError:
+                    os.replace(self.path, victim)
+                except OSError:
+                    continue  # another contender removed or replaced it first
+                try:
+                    moved = victim.read_bytes()
+                except OSError:
+                    moved = None
+                if moved != raw:  # we moved somebody's fresh lock, not the stale one: put it back and look again
+                    try:
+                        os.rename(victim, self.path)
+                    except OSError:
+                        pass
+                    continue
+                try:
+                    victim.unlink()
+                except OSError:
                     pass
+                taken = why
                 continue
-            self.started = self.clock().isoformat(timespec="seconds")
+            except PermissionError:
+                continue  # Windows: the file is being deleted or created at this moment
+            self.started = self.clock().isoformat(timespec="milliseconds")
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(self._text())
             return taken
-        raise jb.JobError("could not take the driver lock")
+        raise jb.JobError("could not take the driver lock (contention); try again")
 
     def _text(self) -> str:
         return json.dumps({"pid": os.getpid(), "started": self.started,
-                           "heartbeat": self.clock().isoformat(timespec="seconds")})
+                           "heartbeat": self.clock().isoformat(timespec="milliseconds")})
 
     def beat(self) -> None:
         atomic_write(self.path, self._text())
@@ -566,6 +681,31 @@ class DriverLock:
                 os.unlink(self.path)
             except OSError:
                 pass
+
+
+class Heartbeat:
+    """Keeps ``driver.lock`` fresh from its own thread, so a long full suite or merge cannot make a live driver look
+    dead (C2)."""
+
+    def __init__(self, lock: DriverLock, seconds: float):
+        self.lock, self.seconds = lock, seconds
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self._run, name="job-heartbeat", daemon=True)
+
+    def _run(self) -> None:
+        while not self.stop_event.wait(self.seconds):
+            try:
+                self.lock.beat()
+            except OSError:
+                pass  # a transient sharing error: the next beat will do
+
+    def __enter__(self) -> "Heartbeat":
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.stop_event.set()
+        self.thread.join(timeout=5)
 
 
 # --- resume ---------------------------------------------------------------------------------------
@@ -631,6 +771,7 @@ def reconcile(state: StateRoot, rec: Recorder, retry: tuple[str, ...] = ()) -> d
                 start_at[sid] = "integrate"
             else:
                 rec.emit("subtask_state", subtask=sid, state="failed", reason="stale: the review did not finish")
+                _retain(state, job.task_id, sid, "stale: the driver stopped during the review")
         elif sub.state == "reviewed":
             start_at[sid] = "integrate"
         else:  # verification_failed / changes_requested: the correction was lost with the driver
@@ -673,7 +814,7 @@ RESUMABLE = ("paused_user", "paused_plan_changed", "running", "preparing", "fina
 
 def resume_job(state: StateRoot, project_root: Path, job_id: str, *, retry: tuple[str, ...] = (),
                verify_commands: tuple[str, ...] = (), hooks: Hooks | None = None,
-               accept_plan: bool = True) -> jb.JobState:
+               accept_plan: bool = True, force_takeover: bool = False) -> jb.JobState:
     """Continue a job from its events after a pause or a driver crash. Takes the driver lock first."""
     hooks = hooks or Hooks()
     job, _ = jb.load_job(state, job_id)
@@ -690,33 +831,30 @@ def resume_job(state: StateRoot, project_root: Path, job_id: str, *, retry: tupl
     if unknown:
         raise jb.JobError(f"--retry: no such subtask: {', '.join(unknown)}")
     lock = DriverLock(directory)
-    taken = lock.acquire()
+    taken = lock.acquire(force_takeover)
     try:
-        options = options_from_record(job.options)
-        if verify_commands:
-            options.verify_commands = verify_commands
-        if not options.verify_commands:
-            raise jb.JobError("no full-suite command: pass --verify-command")
-        plan = jb.build_plan(state, job.task_id, options, hooks.available)
-        engine = Engine(state, project_root, job, options, plan, hooks)
-        engine.lock = lock
-        if taken:
-            engine.rec.emit("lock_takeover", reason=taken)
-        if plan.plan_revision != job.plan_revision:
-            if not accept_plan:
-                return _rest_only(engine, "paused_plan_changed", f"plan revision {job.plan_revision} -> {plan.plan_revision}")
-            engine.rec.emit("plan_revision_accepted", revision=plan.plan_revision, previous=job.plan_revision)
-        if not plan.ok:
-            return _rest_only(engine, "paused_user", "the plan has problems: " + "; ".join(plan.problems))
-        engine.rec.emit("job_resumed", retry=list(retry), previous_state=job.state)
-        engine.start_at = reconcile(state, engine.rec, retry)
-        return engine.run()
+        with Heartbeat(lock, hooks.heartbeat_seconds):
+            options = options_from_record(job.options)
+            if verify_commands:
+                options.verify_commands = verify_commands
+            if not options.verify_commands:
+                raise jb.JobError("no full-suite command: pass --verify-command")
+            plan = jb.build_plan(state, job.task_id, options, hooks.available)
+            engine = Engine(state, project_root, job, options, plan, hooks)
+            if taken:
+                engine.rec.emit("lock_takeover", reason=taken)
+            if plan.plan_revision != job.plan_revision:
+                if not accept_plan:
+                    return engine._rest("paused_plan_changed", f"plan revision {job.plan_revision} -> {plan.plan_revision}")
+                engine.rec.emit("plan_revision_accepted", revision=plan.plan_revision, previous=job.plan_revision)
+            if not plan.ok:
+                return engine._rest("paused_user", "the plan has problems: " + "; ".join(plan.problems))
+            engine.rec.emit("job_resumed", retry=list(retry), previous_state=job.state)
+            engine.cleanup_review_worktrees()
+            engine.start_at = reconcile(state, engine.rec, retry)
+            return engine.run()
     finally:
         lock.release()
-
-
-def _rest_only(engine: Engine, state: str, reason: str) -> jb.JobState:
-    return engine._rest(state, reason)
 
 
 def run_job(state: StateRoot, project_root: Path, job_id: str, options: jb.JobOptions, hooks: Hooks | None = None) -> jb.JobState:
@@ -727,25 +865,26 @@ def run_job(state: StateRoot, project_root: Path, job_id: str, options: jb.JobOp
     engine = Engine(state, project_root, job, options, plan, hooks)
     lock = DriverLock(jb.job_dir(state, job_id))
     lock.acquire()
-    engine.lock = lock
     try:
-        if plan.plan_revision != job.plan_revision:
-            return _rest_only(engine, "paused_plan_changed", f"plan revision {job.plan_revision} -> {plan.plan_revision}")
-        return engine.run()
+        with Heartbeat(lock, hooks.heartbeat_seconds):
+            if plan.plan_revision != job.plan_revision:
+                return engine._rest("paused_plan_changed", f"plan revision {job.plan_revision} -> {plan.plan_revision}")
+            return engine.run()
     finally:
         lock.release()
 
 
 def request_cancel(state: StateRoot, job_id: str, execute: bool = False) -> str:
     """Ask the driver of ``job_id`` to stop: writes ``cancel.requested`` (the driver polls it and kills the running
-    attempts). Returns what happened. With no live driver the job is finalised here instead."""
+    attempts, including a running verification). A driver whose process is alive counts as live whatever its
+    heartbeat says. With no live driver the job is finalised here instead."""
     directory = jb.job_dir(state, job_id)
     job, _ = jb.load_job(state, job_id)
     if job.state in ("cancelled", "failed", "awaiting_approval"):
         raise jb.JobError(f"the job is already {job.state}")
     lock = DriverLock(directory)
     info = lock._info() if lock.path.exists() else None
-    alive = info is not None and lock.stale(info) is None
+    alive = lock.alive(info)
     if not execute:
         return f"would write {CANCEL_MARKER} for job {job_id}" + ("" if alive else " and mark it cancelled (no live driver)")
     atomic_write(directory / CANCEL_MARKER, json.dumps({"requested": datetime.now().isoformat(timespec="seconds")}) + "\n")
