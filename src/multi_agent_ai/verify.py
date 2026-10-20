@@ -238,7 +238,7 @@ def verify(
 
     # Always capture repository evidence, including after command/preflight failure.
     if cwd.is_dir() and (cwd / ".git").exists():
-        status, output = _git_command(cwd, ("status", "--porcelain"), env, directory, index)
+        status, output = _git_command(cwd, ("status", "--porcelain", "--untracked-files=all"), env, directory, index)
         index += 1
         result.commands.append(status)
         if status.status == ENVIRONMENT_ERROR:
