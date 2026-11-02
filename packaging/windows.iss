@@ -22,8 +22,10 @@ UninstallDisplayIcon={app}\{#AppExe}
 
 [Files]
 Source: "..\dist\Multi-Agent-AI\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\Multi-Agent-AI-GUI\*"; DestDir: "{app}\GUI"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
+Name: "{group}\Multi-Agent-AI Control Panel"; Filename: "{app}\GUI\Multi-Agent-AI-GUI.exe"; WorkingDir: "{userdocs}"
 Name: "{group}\Multi-Agent-AI Help"; Filename: "{cmd}"; Parameters: "/K ""{app}\{#AppExe}"" --help"; WorkingDir: "{userdocs}"
 Name: "{group}\Check Multi-Agent-AI"; Filename: "{cmd}"; Parameters: "/K ""{app}\{#AppExe}"" doctor"; WorkingDir: "{userdocs}"
 Name: "{group}\Uninstall Multi-Agent-AI"; Filename: "{uninstallexe}"
@@ -31,5 +33,5 @@ Name: "{group}\Uninstall Multi-Agent-AI"; Filename: "{uninstallexe}"
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 
-Name: "{autodesktop}\Multi-Agent-AI"; Filename: "{cmd}"; Parameters: "/K ""{app}\{#AppExe}"" --help"; Tasks: desktopicon
+Name: "{autodesktop}\Multi-Agent-AI"; Filename: "{app}\GUI\Multi-Agent-AI-GUI.exe"; Tasks: desktopicon
 
