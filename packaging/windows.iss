@@ -19,7 +19,6 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\{#AppExe}
-ChangesEnvironment=yes
 
 [Files]
 Source: "..\dist\Multi-Agent-AI\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -32,19 +31,5 @@ Name: "{group}\Uninstall Multi-Agent-AI"; Filename: "{uninstallexe}"
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 
-[Icons]
 Name: "{autodesktop}\Multi-Agent-AI"; Filename: "{cmd}"; Parameters: "/K ""{app}\{#AppExe}"" --help"; Tasks: desktopicon
 
-[Registry]
-Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Check: not PathAlreadyAdded
-; The command remains available through Start Menu even if PATH update is disabled.
-
-[Code]
-function PathAlreadyAdded: Boolean;
-var
-  PathValue: string;
-begin
-  if not RegQueryStringValue(HKCU, 'Environment', 'Path', PathValue) then
-    PathValue := '';
-  Result := Pos(';' + ExpandConstant('{app}') + ';', ';' + PathValue + ';') > 0;
-end;
