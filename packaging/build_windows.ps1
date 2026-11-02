@@ -8,11 +8,12 @@ python -m PyInstaller --noconfirm --clean --onedir --console --name Multi-Agent-
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 $iscc = Get-Command iscc -ErrorAction SilentlyContinue
 if (-not $iscc) {
-    $candidate = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+    $candidate = "$([Environment]::GetFolderPath('ProgramFilesX86'))\Inno Setup 6\ISCC.exe"
     if (Test-Path $candidate) { $iscc = $candidate }
 }
 if ($iscc) {
-    & $iscc "/DAppVersion=$version" packaging\windows.iss
+    $isccPath = if ($iscc -is [System.Management.Automation.CommandInfo]) { $iscc.Source } else { [string]$iscc }
+    & $isccPath "/DAppVersion=$version" packaging\windows.iss
     if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
     Write-Host "Installer: dist\Multi-Agent-AI-Setup.exe"
 } else {
