@@ -79,7 +79,7 @@ class MemoryStore:
             raise ValueError("Memory content exceeds 20000 characters")
         memory_id, now = str(uuid.uuid4()), _utc()
         with self._connect() as db:
-            db.execute("""INSERT INTO memory_records VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            db.execute("""INSERT INTO memory_records VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (memory_id, project_id, kind, title, content, "reported", "proposed",
                  1, actor, now, now, hashlib.sha256(content.encode()).hexdigest()))
             db.execute("INSERT INTO memory_sources VALUES(?,?,?)", (memory_id, source_type, source_ref))
