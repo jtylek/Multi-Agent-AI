@@ -48,6 +48,10 @@ Open **Multi-Agent-AI Control Panel**, select a project folder, and click **Disc
 
 After completing sign-in, return to the control panel and click **Refresh Connection Status**. The GUI shows **Connected**, **Not connected**, **Not installed**, or **Unknown**. Codex uses its local `login status` command; Claude uses `auth status --json`. Copilot currently displays **Unknown** when installed because a reliable noninteractive status probe has not been implemented. These are local CLI-reported states, not proof that an API request will succeed. Click **Run Doctor** for environment diagnostics. Doctor checks installation and executable versions but **does not verify account authentication**; successful sign-in must be confirmed by the provider CLI or a later authorized test run. The button does not yet persist agent registration, and the login UX has not been verified on both operating systems.
 
+### Free-access and open-source AI agent selector
+
+The GUI **Free / Open Agents** selector includes a curated catalog of Codex CLI, GitHub Copilot CLI, Claude Code, Gemini CLI, Qwen Code, OpenCode, Aider, Goose, OpenHands, Continue, Cline and Roo Code. It displays whether a known CLI executable is detected, links to official installation information, and labels whether an execution adapter exists. **Only Codex, Copilot and Claude have execution adapters at present.** Catalog-only entries cannot yet be launched as orchestrated workers or connected through the application. A listed agent being open source does **not** mean its underlying model or hosted API is free. Quotas, subscription eligibility and pricing change and must be checked with each provider; the catalog is not an exhaustive or continuously updated directory.
+
 ## Goals
 
 1. **One job, many agents.** Assign a goal to a coordinator, which plans, delegates, monitors, verifies, and reports on work.
