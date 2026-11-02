@@ -124,20 +124,22 @@ class MemoryStore:
 
     def promote(self, memory_id: str, project_id: str, *, expected_revision: int,
                 actor: str, reason: str, evidence: str) -> int:
-        """Activate a reviewed proposal; evidence is mandatory and recorded."""
-        if not evidence.strip():
-            raise ValueError("Evidence reference is required")
+        """Atomically activate a proposal and attach an evidence reference."""
+        if not all((actor.strip(), reason.strip(), evidence.strip())):
+            raise ValueError("Actor, reason, and evidence are required")
+        now = _utc()
         with self._connect() as db:
-            row = db.execute("SELECT status FROM memory_records WHERE id=? AND project_id=?",
-                             (memory_id, project_id)).fetchone()
-            if row is None or row["status"] != "proposed":
-                raise MemoryConflict("Only proposed memories can be promoted")
-        # Promotion records evidence as a source before the revision update.
-        # An actor identity is supplied by the trusted CLI caller; role-based
-        # authorization is still a required follow-up before untrusted agent use.
-        revision = self.change_status(memory_id, project_id, expected_revision=expected_revision,
-                                      status="active", actor=actor, reason=reason)
-        with self._connect() as db:
+            result = db.execute("""UPDATE memory_records SET status='active',
+                revision=revision+1, updated_at_utc=?
+                WHERE id=? AND project_id=? AND revision=? AND status='proposed'""",
+                (now, memory_id, project_id, expected_revision))
+            if result.rowcount != 1:
+                raise MemoryConflict("Missing, stale, or non-proposed memory")
+            content = db.execute("SELECT content FROM memory_records WHERE id=?",
+                                 (memory_id,)).fetchone()[0]
+            revision = expected_revision + 1
+            db.execute("INSERT INTO memory_revisions VALUES(?,?,?,?,?,?,?)",
+                       (memory_id, revision, content, "active", actor, now, reason))
             db.execute("INSERT OR IGNORE INTO memory_sources VALUES(?,?,?)",
                        (memory_id, "evidence", evidence))
         return revision
