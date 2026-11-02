@@ -33,5 +33,6 @@ Name: "{group}\Uninstall Multi-Agent-AI"; Filename: "{uninstallexe}"
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 
+[Icons]
 Name: "{autodesktop}\Multi-Agent-AI"; Filename: "{app}\GUI\Multi-Agent-AI-GUI.exe"; Tasks: desktopicon
 
