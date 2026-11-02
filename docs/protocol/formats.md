@@ -1,3 +1,6 @@
+
+> **Platform scope update (2026-11-02):** Multi-Agent-AI targets **Windows 10/11 and Linux** with one shared Python orchestration engine and Tkinter control panel. Windows uses a PyInstaller/Inno Setup installer; Linux uses a per-user archive installer. Platform-specific notes below describe implementation details or historical Windows tests, **not a Windows-only product restriction**. Linux provider execution and both installers still require end-to-end verification.
+
 # Coordination file formats (format 1)
 
 Exact grammar for the files described in [agent-messaging.md](agent-messaging.md): requests,
