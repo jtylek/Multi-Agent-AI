@@ -50,7 +50,15 @@ After completing sign-in, return to the control panel and click **Refresh Connec
 
 ### Free-access and open-source AI agent selector
 
-The GUI **Free / Open Agents** selector includes a curated catalog of Codex CLI, GitHub Copilot CLI, Claude Code, Gemini CLI, Qwen Code, OpenCode, Aider, Goose, OpenHands, Continue, Cline and Roo Code. It displays whether a known CLI executable is detected, links to official installation information, and labels whether an execution adapter exists. **Only Codex, Copilot and Claude have execution adapters at present.** Catalog-only entries cannot yet be launched as orchestrated workers or connected through the application. A listed agent being open source does **not** mean its underlying model or hosted API is free. Quotas, subscription eligibility and pricing change and must be checked with each provider; the catalog is not an exhaustive or continuously updated directory.
+The GUI **Free / Open Agents** selector includes a curated catalog of Codex CLI, GitHub Copilot CLI, Claude Code, Gemini CLI, Qwen Code, OpenCode, Aider, Goose, OpenHands, Continue, Cline and Roo Code. It displays whether a known CLI executable is detected, links to official installation information, and labels whether an execution adapter exists. **Codex, Copilot and Claude have existing review/implement adapters; Gemini, Qwen, OpenCode, Aider and Goose now have experimental review-only execution adapters.** Implement mode deliberately fails closed for those five pending validated least-privilege profiles. OpenHands, Continue, Cline and Roo Code remain catalog-only. A listed agent being open source does **not** mean its underlying model or hosted API is free. Quotas, subscription eligibility and pricing change and must be checked with each provider; the catalog is not an exhaustive or continuously updated directory.
+
+### Experimental community execution adapters (review-only)
+
+Managed worker adapter classes for `gemini`, `qwen`, `opencode`, `aider`, and `goose` are registered in the runner. They use documented noninteractive CLI entrypoints and existing worker attempt bookkeeping. Review-mode invocation and output parsing have unit tests; **no real-provider end-to-end run or Linux runtime verification has been completed**. The worker runner still depends on Windows-oriented process handling, so these additions **do not establish Linux execution support**.
+
+All five reject `implement` requests with `profile_unconfigured` until reviewed permission profiles can be enforced. Review runs are not a security sandbox: locally configured tools, plugins or extensions may still execute commands or modify files. Run them only in disposable isolated worktrees, inspect diffs, and do not assume a review request prevents side effects. Never auto-merge or push. Authentication and API/model costs depend on each CLI and its configured backend.
+
+CLI patterns are based on official documentation: Gemini `-p ... --output-format json`, Qwen `-p ... --output-format json`, OpenCode `run --agent plan`, Aider `--message ... --chat-mode ask --no-auto-commits`, and Goose `run --no-session -t ...`. Version-specific flags and behavior must be checked in CI and real provider smoke tests.
 
 ## Goals
 
