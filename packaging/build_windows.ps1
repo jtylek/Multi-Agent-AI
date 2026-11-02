@@ -6,6 +6,8 @@ python -m pip install --upgrade pyinstaller .
 if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 python -m PyInstaller --noconfirm --clean --onedir --console --name Multi-Agent-AI --collect-submodules multi_agent_ai packaging\launcher.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
+python -m PyInstaller --noconfirm --clean --onedir --windowed --name Multi-Agent-AI-GUI --collect-submodules multi_agent_ai packaging\gui_launcher.py
+if ($LASTEXITCODE -ne 0) { throw "GUI PyInstaller failed" }
 $iscc = Get-Command iscc -ErrorAction SilentlyContinue
 if (-not $iscc) {
     $candidate = "$([Environment]::GetFolderPath('ProgramFilesX86'))\Inno Setup 6\ISCC.exe"
