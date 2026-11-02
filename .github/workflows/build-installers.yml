@@ -24,6 +24,7 @@ jobs:
       - run: choco install innosetup -y --no-progress
       - run: powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
       - run: .\dist\Multi-Agent-AI\Multi-Agent-AI.exe --help
+      - run: Test-Path .\dist\Multi-Agent-AI-GUI\Multi-Agent-AI-GUI.exe | ForEach-Object { if (-not $_) { throw "GUI executable missing" } }
       - uses: actions/upload-artifact@v4
         with:
           name: Multi-Agent-AI-Windows-Installer
