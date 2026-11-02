@@ -112,7 +112,7 @@ class ControlPanel(tk.Tk):
         frame = ttk.Frame(window, padding=12)
         frame.pack(fill="both", expand=True)
         ttk.Label(frame, text="Catalog: free plans, open-source agents and local options", font=("Segoe UI", 13, "bold")).pack(anchor="w")
-        ttk.Label(frame, text="Free software does not guarantee free model usage. Only Claude, Codex and Copilot currently have execution adapters.").pack(anchor="w", pady=(4, 10))
+        ttk.Label(frame, text="Free software does not guarantee free model usage. Gemini, Qwen, OpenCode, Aider and Goose currently have review-only adapters.").pack(anchor="w", pady=(4, 10))
         columns = ("name", "installed", "access", "integration")
         tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="browse")
         for key, width in (("name", 165), ("installed", 100), ("access", 440), ("integration", 135)):
@@ -120,7 +120,7 @@ class ControlPanel(tk.Tk):
             tree.column(key, width=width)
         for entry in CATALOG:
             found = bool(entry.cli and (shutil.which(entry.cli) or shutil.which(entry.cli + ".cmd")))
-            tree.insert("", "end", iid=entry.key, values=(entry.name, "Installed" if found else "Not detected", entry.access, "Supported" if entry.adapter else "Catalog only"))
+            tree.insert("", "end", iid=entry.key, values=(entry.name, "Installed" if found else "Not detected", entry.access, ("Review only" if entry.key in {"gemini", "qwen", "opencode", "aider", "goose"} else "Supported") if entry.adapter else "Catalog only"))
         tree.pack(fill="both", expand=True)
         buttons = ttk.Frame(frame)
         buttons.pack(fill="x", pady=8)
