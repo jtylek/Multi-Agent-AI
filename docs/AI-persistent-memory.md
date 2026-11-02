@@ -1,8 +1,11 @@
+
+> **Platform scope update (2026-11-02):** Multi-Agent-AI targets **Windows 10/11 and Linux** with one shared Python orchestration engine and Tkinter control panel. Windows uses a PyInstaller/Inno Setup installer; Linux uses a per-user archive installer. Platform-specific notes below describe implementation details or historical Windows tests, **not a Windows-only product restriction**. Linux provider execution and both installers still require end-to-end verification.
+
 # AI Persistent Memory — Architecture and Implementation Plan
 
 **Project:** Multi-Agent-AI  
 **Status:** Proposed design; not implemented  
-**Target:** Native Windows 10/11, Python >=3.11, VS Code, Claude Code, Codex CLI and Copilot CLI  
+**Target:** Native Windows 10/11 and Linux, Python >=3.11, VS Code, Claude Code, Codex CLI and Copilot CLI  
 **Scope:** Project-neutral persistent knowledge shared by managed agents across tasks, sessions, restarts, and providers.
 
 ## 1. Executive summary
