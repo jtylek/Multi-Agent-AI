@@ -15,7 +15,6 @@ def test_memory_cli_lifecycle(tmp_path, capsys):
                  "--kind", "lesson", "--title", "Process handling",
                  "--content-file", str(content), "--actor", "agent",
                  "--source-type", "task", "--source-ref", "T1"]) == 0
-    key = json.loads(capsys.readouterr().out.split("}\n")[-2] + "}")["id"] if False else None
     store = MemoryStore(root / "memory.sqlite3")
     with store._connect() as db:
         key = db.execute("SELECT id FROM memory_records").fetchone()[0]
