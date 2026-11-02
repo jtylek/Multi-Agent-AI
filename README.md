@@ -38,6 +38,10 @@ If extracted scripts lack executable permission, run `bash install.sh` instead. 
 
 The Linux GUI uses the same Tkinter source as Windows, with **Discover AI Agents** and **Run Doctor**. The installer does not install third-party provider CLIs. Linux builds and tests must pass CI before a release is considered verified.
 
+## Platform support
+
+**Windows 10/11 and Linux** are target platforms. The shared Python CLI and Tkinter control panel expose provider discovery and Doctor diagnostics on both systems. Windows uses a self-contained installer; Linux uses a per-user Python virtual environment installer. Both packaging workflows are under development and not yet release-verified. Existing Windows-specific field reports remain historical evidence, not Linux compatibility claims.
+
 ## Goals
 
 1. **One job, many agents.** Assign a goal to a coordinator, which plans, delegates, monitors, verifies, and reports on work.
@@ -161,7 +165,7 @@ A successful notification is **not** a successful acknowledgment. An unreachable
 
 The source protocol also defines bounded response watches, cleanup ownership, and handoff notes. These rules should be implemented and tested rather than replaced by uncontrolled mailbox polling.
 
-## Native Windows architecture (planned)
+## Cross-platform runtime architecture (planned)
 
 | Component | Responsibility |
 | --- | --- |
@@ -174,7 +178,7 @@ The source protocol also defines bounded response watches, cleanup ownership, an
 | SQLite ledger | Attempts, failure categories, usage, latency, task outcomes |
 | VS Code integration | Job submission, task board, logs, message and approval UI |
 
-Windows implementation must correctly resolve `.exe`, `.cmd`, and `.bat` entrypoints, manage process trees, stream logs, tolerate UTF-8 BOMs, and classify configuration/authentication failures without blindly retrying. Git worktrees provide editing isolation **but are not a security boundary**.
+On Windows, the implementation must correctly resolve `.exe`, `.cmd`, and `.bat` entrypoints, manage process trees, stream logs, tolerate UTF-8 BOMs, and classify configuration/authentication failures without blindly retrying. Git worktrees provide editing isolation **but are not a security boundary**.
 
 ## Quick start
 
@@ -339,7 +343,7 @@ The order follows decision D15 and [docs/next-milestone.md](docs/next-milestone.
 
 ## Contributing
 
-This repository is being bootstrapped. Initial contributions should focus on reliable Windows execution, protocol compatibility, and reproducible tests. Architectural ideas may be inspired by projects such as Orka, but implementation should be original or reuse code only in accordance with its license.
+This repository is being bootstrapped. Initial contributions should focus on reliable Windows and Linux execution, protocol compatibility, and reproducible tests. Architectural ideas may be inspired by projects such as Orka, but implementation should be original or reuse code only in accordance with its license.
 
 ## License
 
