@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import queue
+import shutil
+import webbrowser
 import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from . import doctor, provider_auth
+from .agent_catalog import CATALOG
 from .state import resolve_state_root
 
 
@@ -39,6 +42,8 @@ class ControlPanel(tk.Tk):
         self.connect_button.pack(side="left", padx=(8, 0))
         self.refresh_button = ttk.Button(actions, text="Refresh Connection Status", command=self.refresh_connections)
         self.refresh_button.pack(side="left", padx=(8, 0))
+        self.catalog_button = ttk.Button(actions, text="Free / Open Agents", command=self.show_catalog)
+        self.catalog_button.pack(side="left", padx=(8, 0))
         ttk.Label(outer, text="Select a discovered provider row, then Connect. Sign-in is handled by the provider in a separate terminal/browser.").pack(anchor="w")
         self.status = tk.StringVar(value="Ready. Select your project folder.")
         ttk.Label(outer, textvariable=self.status).pack(anchor="w", pady=(4, 8))
@@ -99,6 +104,45 @@ class ControlPanel(tk.Tk):
                     rows.append((display + " version", checks[1].status, "", checks[1].detail))
             return rows
         self.start("Discovering installed AI providers", task)
+
+    def show_catalog(self):
+        window = tk.Toplevel(self)
+        window.title("Free-access and Open-source AI Agents")
+        window.geometry("920x520")
+        frame = ttk.Frame(window, padding=12)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text="Catalog: free plans, open-source agents and local options", font=("Segoe UI", 13, "bold")).pack(anchor="w")
+        ttk.Label(frame, text="Free software does not guarantee free model usage. Only Claude, Codex and Copilot currently have execution adapters.").pack(anchor="w", pady=(4, 10))
+        columns = ("name", "installed", "access", "integration")
+        tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="browse")
+        for key, width in (("name", 165), ("installed", 100), ("access", 440), ("integration", 135)):
+            tree.heading(key, text=key.title())
+            tree.column(key, width=width)
+        for entry in CATALOG:
+            found = bool(entry.cli and (shutil.which(entry.cli) or shutil.which(entry.cli + ".cmd")))
+            tree.insert("", "end", iid=entry.key, values=(entry.name, "Installed" if found else "Not detected", entry.access, "Supported" if entry.adapter else "Catalog only"))
+        tree.pack(fill="both", expand=True)
+        buttons = ttk.Frame(frame)
+        buttons.pack(fill="x", pady=8)
+        def open_selected():
+            selected = tree.selection()
+            if selected:
+                from .agent_catalog import get_entry
+                webbrowser.open(get_entry(selected[0]).url)
+        def connect_selected():
+            selected = tree.selection()
+            if not selected:
+                return
+            key = selected[0]
+            if key not in provider_auth.LOGIN_COMMANDS:
+                messagebox.showinfo("Not integrated", "This agent is catalog-only. Open its website for installation instructions; no orchestrator adapter or login workflow exists yet.", parent=window)
+                return
+            try:
+                messagebox.showinfo("Provider login", provider_auth.launch_login(key), parent=window)
+            except (OSError, RuntimeError, ValueError) as exc:
+                messagebox.showerror("Provider login", str(exc), parent=window)
+        ttk.Button(buttons, text="Open Provider Website", command=open_selected).pack(side="left")
+        ttk.Button(buttons, text="Connect Supported Provider", command=connect_selected).pack(side="left", padx=8)
 
     def connect(self):
         selected = self.table.selection()
