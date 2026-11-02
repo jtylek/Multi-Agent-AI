@@ -4,6 +4,8 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import uuid
+
+from .policy import validate_content, validate_source
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -75,8 +77,8 @@ class MemoryStore:
             actor: str, source_type: str, source_ref: str) -> str:
         if kind not in KINDS or not all((project_id.strip(), title.strip(), content.strip(), actor.strip(), source_type.strip(), source_ref.strip())):
             raise ValueError("Invalid memory fields or kind")
-        if len(content) > 20000:
-            raise ValueError("Memory content exceeds 20000 characters")
+        validate_content(content)
+        validate_source(source_type, source_ref)
         memory_id, now = str(uuid.uuid4()), _utc()
         with self._connect() as db:
             db.execute("""INSERT INTO memory_records VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
