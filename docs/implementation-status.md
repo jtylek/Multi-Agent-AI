@@ -1,5 +1,13 @@
 # Implementation status
 
+**Project status: Under active development (resumed 2026-11-02).** The persistent-memory subsystem is in development; it is not yet a validated Windows release. The existing job driver still requires a real-provider end-to-end trial.
+
+## Persistent memory M1 (development branch)
+
+- Implemented in source: separate SQLite database, FTS5 index, project-scoped proposals and searches, evidence-referenced promotion, retraction, revision checks, CLI operations and initial tests.
+- Pending verification: full Windows test suite, complete authorization model, sensitive-content handling, context injection, and actual provider runs. The CLI is a developer preview, not a production-ready memory service.
+
+
 What exists in code today. Decisions are recorded in [decisions.md](decisions.md) and are not
 repeated here; the protocol is [protocol/agent-messaging.md](protocol/agent-messaging.md)
 (v1) and the file grammar [protocol/formats.md](protocol/formats.md) (format 1). Anything not
