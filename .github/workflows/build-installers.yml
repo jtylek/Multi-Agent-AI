@@ -1,0 +1,45 @@
+name: Build installers
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q
+  windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: choco install innosetup -y --no-progress
+      - run: powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
+      - run: .\dist\Multi-Agent-AI\Multi-Agent-AI.exe --help
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Multi-Agent-AI-Windows-Installer
+          path: dist/Multi-Agent-AI-Setup.exe
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Multi-Agent-AI-Windows-Installer
+          path: dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Multi-Agent-AI-Setup.exe
+          generate_release_notes: true
