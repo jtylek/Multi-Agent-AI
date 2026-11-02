@@ -8,8 +8,8 @@ def test_catalog_unique_and_valid():
 
 
 def test_supported_adapters():
-    assert {item.key for item in CATALOG if item.adapter} == {"codex", "copilot", "claude"}
+    assert {item.key for item in CATALOG if item.adapter} == {"codex", "copilot", "claude", "gemini", "qwen", "opencode", "aider", "goose"}
 
 
 def test_gemini_is_catalog_only():
-    assert get_entry("gemini").adapter is False
+    assert get_entry("gemini").adapter is True
