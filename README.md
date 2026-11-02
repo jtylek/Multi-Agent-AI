@@ -1,10 +1,10 @@
 # Multi-Agent AI
 
-**Native Windows multi-agent development orchestration for Visual Studio Code.**
+**Cross-platform Windows/Linux multi-agent development orchestration for Visual Studio Code.**
 
 Multi-Agent AI is an open-source project to coordinate **OpenAI Codex CLI, Anthropic Claude Code, and GitHub Copilot CLI** as a team of coding agents. A developer gives a job to one **coordinator agent**; the coordinator breaks it into subtasks, delegates work to suitable agents and sessions, tracks progress, reviews results, and proposes an integrated change.
 
-The primary development environment is **Windows 10/11 with Visual Studio Code**. The orchestrator is intended to work with existing CLI authentication and local repositories, without requiring WSL or Docker. It is project-neutral: any Git repository can be a target, with project-specific settings kept in a project profile.
+The primary development environments are **Windows 10/11 and Linux with Visual Studio Code**. The orchestrator is intended to work with existing CLI authentication and local repositories, without requiring WSL or Docker. It is project-neutral: any Git repository can be a target, with project-specific settings kept in a project profile.
 
 > **Project status:** Early development, **under active development** (resumed 2026-11-02). The command-line engine exists and is tested with fake provider executables: coordination files and mailbox, managed Codex, Copilot and Claude workers, a worktree manager, a verification engine and a job driver. **No real provider run has completed through the job driver yet**, so treat it as unproven. Persistent memory M1 is under implementation on a feature branch; adaptive routing, the performance ledger and the VS Code integration are not implemented. See [docs/implementation-status.md](docs/implementation-status.md) for what works, and [docs/problems.md](docs/problems.md) for known problems and the state to resume from. The rest of this README describes the target architecture.
 
@@ -23,6 +23,20 @@ The build creates `dist\Multi-Agent-AI-Setup.exe` when Inno Setup is present; ot
 After installation, use the Start Menu **Multi-Agent-AI Help** shortcut to open the CLI. The installed executable is `%LOCALAPPDATA%\Programs\Multi-Agent-AI\Multi-Agent-AI.exe`. It does **not** bundle Claude Code, Codex CLI, or GitHub Copilot CLI; install and authenticate these separately for managed provider jobs. The CLI and memory database can be tested without providers.
 
 The Windows installer now includes a **Multi-Agent-AI Control Panel** (Tkinter) with **Discover AI Agents** (local CLI detection/version checks) and **Run Doctor** (read-only environment diagnostics). Select the target Git project folder in the GUI. It does not yet provide task scheduling, agent registration approvals, or a VS Code extension. GUI packaging and Windows execution still require CI verification.
+
+## Linux installation (ScreenCapture-style)
+
+The Linux release archive `multi-agent-ai-linux.tar.gz` contains `install.sh`, `uninstall.sh`, and the Python package source. This is a **per-user installation** into `~/.local/share/multi-agent-ai`; no root privileges are required for the app. Linux requires **Python 3.11+**, `python3-venv`, and `python3-tk` for the GUI (unlike the self-contained Windows executable). On Ubuntu/Mint install system prerequisites with `sudo apt install python3-venv python3-tk`; on older distributions, install Python 3.11+ separately.
+
+```bash
+tar -xzf multi-agent-ai-linux.tar.gz
+cd multi-agent-ai
+./install.sh
+```
+
+If extracted scripts lack executable permission, run `bash install.sh` instead. Start **Multi-Agent-AI** from your desktop applications menu, or run `~/.local/bin/multi-agent-ai-gui`. The CLI is `~/.local/bin/multi-agent-ai`. Remove with `bash uninstall.sh`. Project-local `.multi-agent-ai` databases and task state are preserved.
+
+The Linux GUI uses the same Tkinter source as Windows, with **Discover AI Agents** and **Run Doctor**. The installer does not install third-party provider CLIs. Linux builds and tests must pass CI before a release is considered verified.
 
 ## Goals
 
