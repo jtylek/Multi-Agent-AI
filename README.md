@@ -42,6 +42,12 @@ The Linux GUI uses the same Tkinter source as Windows, with **Discover AI Agents
 
 **Windows 10/11 and Linux** are target platforms. The shared Python CLI and Tkinter control panel expose provider discovery and Doctor diagnostics on both systems. Windows uses a self-contained installer; Linux uses a per-user Python virtual environment installer. Both packaging workflows are under development and not yet release-verified. Existing Windows-specific field reports remain historical evidence, not Linux compatibility claims.
 
+### Connect AI agents through the GUI
+
+Open **Multi-Agent-AI Control Panel**, select a project folder, and click **Discover AI Agents**. Select a detected **Claude Code**, **Codex CLI**, or **GitHub Copilot CLI** row, then click **Connect Selected Agent**. A separate interactive terminal opens the provider's own login command (Codex: `codex login`; Copilot: `copilot login`; Claude: `claude`, then follow its login prompts). Depending on the installed provider version, the CLI may open a browser or display a device-code URL. Multi-Agent-AI never asks for or stores the provider's password or OAuth tokens.
+
+After completing sign-in, return to the control panel and click **Run Doctor**. Doctor checks installation and executable versions but **does not verify account authentication**; successful sign-in must be confirmed by the provider CLI or a later authorized test run. The button does not yet persist agent registration, and the login UX has not been verified on both operating systems.
+
 ## Goals
 
 1. **One job, many agents.** Assign a goal to a coordinator, which plans, delegates, monitors, verifies, and reports on work.
