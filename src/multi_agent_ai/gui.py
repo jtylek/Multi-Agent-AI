@@ -7,7 +7,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from . import doctor
+from . import doctor, provider_auth
 from .state import resolve_state_root
 
 
@@ -35,6 +35,9 @@ class ControlPanel(tk.Tk):
         self.discover_button.pack(side="left", padx=(0, 8))
         self.doctor_button = ttk.Button(actions, text="Run Doctor", command=self.run_doctor)
         self.doctor_button.pack(side="left")
+        self.connect_button = ttk.Button(actions, text="Connect Selected Agent", command=self.connect)
+        self.connect_button.pack(side="left", padx=(8, 0))
+        ttk.Label(outer, text="Select a discovered provider row, then Connect. Sign-in is handled by the provider in a separate terminal/browser.").pack(anchor="w")
         self.status = tk.StringVar(value="Ready. Select your project folder.")
         ttk.Label(outer, textvariable=self.status).pack(anchor="w", pady=(4, 8))
         self.table = ttk.Treeview(outer, columns=("provider", "status", "details"), show="headings")
@@ -92,6 +95,24 @@ class ControlPanel(tk.Tk):
                     rows.append((display + " version", checks[1].status, checks[1].detail))
             return rows
         self.start("Discovering installed AI providers", task)
+
+    def connect(self):
+        selected = self.table.selection()
+        if not selected:
+            messagebox.showinfo("Connect agent", "Select a provider in the results table first.")
+            return
+        name = str(self.table.item(selected[0], "values")[0]).lower()
+        provider = next((key for key, display, _, _ in doctor.PROVIDERS
+                         if name == display.lower() or name == (display + " version").lower()), None)
+        if provider is None:
+            messagebox.showinfo("Connect agent", "Select a discovered Claude, Codex or Copilot provider row.")
+            return
+        try:
+            message = provider_auth.launch_login(provider)
+        except (OSError, RuntimeError, ValueError) as exc:
+            messagebox.showerror("Connect agent", str(exc))
+        else:
+            messagebox.showinfo("Connect agent", message)
 
     def run_doctor(self):
         def task(root):
