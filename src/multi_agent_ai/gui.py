@@ -37,12 +37,14 @@ class ControlPanel(tk.Tk):
         self.doctor_button.pack(side="left")
         self.connect_button = ttk.Button(actions, text="Connect Selected Agent", command=self.connect)
         self.connect_button.pack(side="left", padx=(8, 0))
+        self.refresh_button = ttk.Button(actions, text="Refresh Connection Status", command=self.refresh_connections)
+        self.refresh_button.pack(side="left", padx=(8, 0))
         ttk.Label(outer, text="Select a discovered provider row, then Connect. Sign-in is handled by the provider in a separate terminal/browser.").pack(anchor="w")
         self.status = tk.StringVar(value="Ready. Select your project folder.")
         ttk.Label(outer, textvariable=self.status).pack(anchor="w", pady=(4, 8))
-        self.table = ttk.Treeview(outer, columns=("provider", "status", "details"), show="headings")
+        self.table = ttk.Treeview(outer, columns=("provider", "status", "connection", "details"), show="headings")
         for key, label, width in (("provider", "Provider / Check", 190),
-                                  ("status", "Status", 110), ("details", "Details", 520)):
+                                  ("status", "Status", 95), ("connection", "Connection", 125), ("details", "Details", 470)):
             self.table.heading(key, text=label)
             self.table.column(key, width=width, stretch=True)
         self.table.pack(fill="both", expand=True)
@@ -71,6 +73,7 @@ class ControlPanel(tk.Tk):
         self.table.delete(*self.table.get_children())
         self.discover_button.configure(state="disabled")
         self.doctor_button.configure(state="disabled")
+        self.refresh_button.configure(state="disabled")
         def worker():
             try:
                 self.events.put(("result", task(root)))
@@ -90,9 +93,10 @@ class ControlPanel(tk.Tk):
                 checks = doctor.check_provider(command, display, install, signin,
                                                os.environ, winproc.resolve_command,
                                                read_cli_version)
-                rows.append((display, checks[0].status, checks[0].detail))
+                connection = provider_auth.check_connection(command)
+                rows.append((display, checks[0].status, connection.status, checks[0].detail + " | " + connection.detail))
                 if len(checks) > 1:
-                    rows.append((display + " version", checks[1].status, checks[1].detail))
+                    rows.append((display + " version", checks[1].status, "", checks[1].detail))
             return rows
         self.start("Discovering installed AI providers", task)
 
@@ -114,10 +118,13 @@ class ControlPanel(tk.Tk):
         else:
             messagebox.showinfo("Connect agent", message)
 
+    def refresh_connections(self):
+        self.discover()
+
     def run_doctor(self):
         def task(root):
             checks = doctor.run_doctor(root, resolve_state_root(root))
-            return [(c.name, c.status, c.detail + (" | Fix: " + c.fix if c.fix and c.status != "ok" else ""))
+            return [(c.name, c.status, "", c.detail + (" | Fix: " + c.fix if c.fix and c.status != "ok" else ""))
                     for c in checks]
         self.start("Checking environment", task)
 
@@ -129,13 +136,14 @@ class ControlPanel(tk.Tk):
                     self.status.set("Operation failed")
                     messagebox.showerror("Multi-Agent-AI", payload)
                 else:
-                    for name, status, detail in payload:
-                        self.table.insert("", "end", values=(name, status, detail),
+                    for name, status, connection, detail in payload:
+                        self.table.insert("", "end", values=(name, status, connection, detail),
                                           tags=(status,))
                     self.status.set(f"Completed: {len(payload)} checks")
                 self.busy = False
                 self.discover_button.configure(state="normal")
                 self.doctor_button.configure(state="normal")
+                self.refresh_button.configure(state="normal")
         except queue.Empty:
             pass
         self.after(100, self.poll)
