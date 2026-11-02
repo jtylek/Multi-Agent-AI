@@ -121,3 +121,31 @@ class MemoryStore:
             db.execute("INSERT INTO memory_revisions VALUES(?,?,?,?,?,?,?)",
                        (memory_id, revision, content, status, actor, now, reason))
             return revision
+
+    def promote(self, memory_id: str, project_id: str, *, expected_revision: int,
+                actor: str, reason: str, evidence: str) -> int:
+        """Activate a reviewed proposal; evidence is mandatory and recorded."""
+        if not evidence.strip():
+            raise ValueError("Evidence reference is required")
+        with self._connect() as db:
+            row = db.execute("SELECT status FROM memory_records WHERE id=? AND project_id=?",
+                             (memory_id, project_id)).fetchone()
+            if row is None or row["status"] != "proposed":
+                raise MemoryConflict("Only proposed memories can be promoted")
+        # Promotion records evidence as a source before the revision update.
+        # An actor identity is supplied by the trusted CLI caller; role-based
+        # authorization is still a required follow-up before untrusted agent use.
+        revision = self.change_status(memory_id, project_id, expected_revision=expected_revision,
+                                      status="active", actor=actor, reason=reason)
+        with self._connect() as db:
+            db.execute("INSERT OR IGNORE INTO memory_sources VALUES(?,?,?)",
+                       (memory_id, "evidence", evidence))
+        return revision
+
+    def doctor(self) -> dict:
+        """Read-only database health and migration inspection."""
+        with self._connect() as db:
+            check = db.execute("PRAGMA integrity_check").fetchone()[0]
+            version = db.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
+            count = db.execute("SELECT COUNT(*) FROM memory_records").fetchone()[0]
+        return {"integrity": check, "schema_version": version, "records": count}
