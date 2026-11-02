@@ -8,6 +8,22 @@ The primary development environment is **Windows 10/11 with Visual Studio Code**
 
 > **Project status:** Early development, **under active development** (resumed 2026-11-02). The command-line engine exists and is tested with fake provider executables: coordination files and mailbox, managed Codex, Copilot and Claude workers, a worktree manager, a verification engine and a job driver. **No real provider run has completed through the job driver yet**, so treat it as unproven. Persistent memory M1 is under implementation on a feature branch; adaptive routing, the performance ledger and the VS Code integration are not implemented. See [docs/implementation-status.md](docs/implementation-status.md) for what works, and [docs/problems.md](docs/problems.md) for known problems and the state to resume from. The rest of this README describes the target architecture.
 
+## Windows installer (ScreenCapture-style)
+
+**Packaging under development:** the feature branch contains a PyInstaller + Inno Setup build that produces `Multi-Agent-AI-Setup.exe`. This is not yet a published or verified release. Once a tagged release has passed Windows CI, download it from [Releases](https://github.com/jtylek/Multi-Agent-AI/releases). The installer installs per user and includes a frozen Python runtime; no Python installation is needed to run it.
+
+Build locally (Windows, Python 3.12 and Inno Setup 6):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
+```
+
+The build creates `dist\Multi-Agent-AI-Setup.exe` when Inno Setup is present; otherwise it produces the portable `dist\Multi-Agent-AI\` directory. GitHub Actions **Build installers** can build an installer artifact manually; pushing a `v*` tag also creates a GitHub Release after tests pass. Do not publish a tag until the build and functional tests have been verified.
+
+After installation, use the Start Menu **Multi-Agent-AI Help** shortcut to open the CLI. The installed executable is `%LOCALAPPDATA%\Programs\Multi-Agent-AI\Multi-Agent-AI.exe`. It does **not** bundle Claude Code, Codex CLI, or GitHub Copilot CLI; install and authenticate these separately for managed provider jobs. The CLI and memory database can be tested without providers.
+
+This is a command-line application, not yet a desktop GUI or VS Code extension.
+
 ## Goals
 
 1. **One job, many agents.** Assign a goal to a coordinator, which plans, delegates, monitors, verifies, and reports on work.
