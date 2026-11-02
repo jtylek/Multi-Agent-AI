@@ -35,14 +35,15 @@ from . import failures as fc
 from . import gitops, quota, scaffold, versions
 from .base import MODES, Invocation, LaunchRequest, ProfileUnconfigured, ProviderAdapter, forbidden_in
 from .claude import ClaudeAdapter
+from .community import GeminiAdapter, QwenAdapter, OpenCodeAdapter, AiderAdapter, GooseAdapter
 from .codex import CodexAdapter
 from .copilot import CopilotAdapter
 from .prompt import VerificationNotDeclared, build_prompt, verification_command
 
-ADAPTERS: dict[str, Callable[[], ProviderAdapter]] = {"codex": CodexAdapter, "copilot": CopilotAdapter, "claude": ClaudeAdapter}
+ADAPTERS: dict[str, Callable[[], ProviderAdapter]] = {"codex": CodexAdapter, "copilot": CopilotAdapter, "claude": ClaudeAdapter, "gemini": GeminiAdapter, "qwen": QwenAdapter, "opencode": OpenCodeAdapter, "aider": AiderAdapter, "goose": GooseAdapter}
 DEFAULT_LIVE_BRANCHES = ("main", "master")
 DEFAULT_TIMEOUT = 1800.0
-RESERVED_AGENT_IDS = ("codex", "copilot", "claude", "code")
+RESERVED_AGENT_IDS = ("codex", "copilot", "claude", "gemini", "qwen", "opencode", "aider", "goose", "code")
 """Bare product names conventionally denote interactive chats; a managed worker never uses them."""
 MANAGED_MARKER = re.compile(r"^Managed worker: provider=(?P<provider>[A-Za-z0-9._-]+)", re.M)
 TAIL_BYTES = 16384
