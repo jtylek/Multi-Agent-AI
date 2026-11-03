@@ -1,4 +1,18 @@
+
+> **Platform scope update (2026-11-02):** Multi-Agent-AI targets **Windows 10/11 and Linux** with one shared Python orchestration engine and Tkinter control panel. Windows uses a PyInstaller/Inno Setup installer; Linux uses a per-user archive installer. Platform-specific notes below describe implementation details or historical Windows tests, **not a Windows-only product restriction**. Linux provider execution and both installers still require end-to-end verification.
+
 # Implementation status
+
+**Project status: Under active development (resumed 2026-11-02).** The persistent-memory subsystem is in development; it is not yet a validated Windows release. The existing job driver still requires a real-provider end-to-end trial.
+
+
+- **GUI connection workflow (developer preview):** Select a discovered provider and click **Connect Selected Agent**. The GUI launches the provider's own interactive login CLI in a terminal; browser/device-code handling remains provider-owned. No credentials are collected or stored by the GUI. This does not yet constitute authenticated registry enrollment or verified login status.
+
+## Persistent memory M1 (development branch)
+
+- Implemented in source: separate SQLite database, FTS5 index, project-scoped proposals and searches, evidence-referenced promotion, retraction, revision checks, CLI operations and initial tests.
+- Pending verification: full Windows test suite, complete authorization model, sensitive-content handling, context injection, and actual provider runs. The CLI is a developer preview, not a production-ready memory service.
+
 
 What exists in code today. Decisions are recorded in [decisions.md](decisions.md) and are not
 repeated here; the protocol is [protocol/agent-messaging.md](protocol/agent-messaging.md)

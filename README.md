@@ -1,12 +1,64 @@
 # Multi-Agent AI
 
-**Native Windows multi-agent development orchestration for Visual Studio Code.**
+**Cross-platform Windows/Linux multi-agent development orchestration for Visual Studio Code.**
 
 Multi-Agent AI is an open-source project to coordinate **OpenAI Codex CLI, Anthropic Claude Code, and GitHub Copilot CLI** as a team of coding agents. A developer gives a job to one **coordinator agent**; the coordinator breaks it into subtasks, delegates work to suitable agents and sessions, tracks progress, reviews results, and proposes an integrated change.
 
-The primary development environment is **Windows 10/11 with Visual Studio Code**. The orchestrator is intended to work with existing CLI authentication and local repositories, without requiring WSL or Docker. It is project-neutral: any Git repository can be a target, with project-specific settings kept in a project profile.
+The primary development environments are **Windows 10/11 and Linux with Visual Studio Code**. The orchestrator is intended to work with existing CLI authentication and local repositories, without requiring WSL or Docker. It is project-neutral: any Git repository can be a target, with project-specific settings kept in a project profile.
 
-> **Project status:** Early development, currently **on hold** (since 2026-10-20). The command-line engine exists and is tested with fake provider executables: coordination files and mailbox, managed Codex, Copilot and Claude workers, a worktree manager, a verification engine and a job driver. **No real provider run has completed through the job driver yet**, so treat it as unproven. Adaptive routing, the performance ledger and the VS Code integration are not implemented. See [docs/implementation-status.md](docs/implementation-status.md) for what works, and [docs/problems.md](docs/problems.md) for known problems and the state to resume from. The rest of this README describes the target architecture.
+> **Project status:** Early development, **under active development** (resumed 2026-11-02). The command-line engine exists and is tested with fake provider executables: coordination files and mailbox, managed Codex, Copilot and Claude workers, a worktree manager, a verification engine and a job driver. **No real provider run has completed through the job driver yet**, so treat it as unproven. Persistent memory M1 is under implementation on a feature branch; adaptive routing, the performance ledger and the VS Code integration are not implemented. See [docs/implementation-status.md](docs/implementation-status.md) for what works, and [docs/problems.md](docs/problems.md) for known problems and the state to resume from. The rest of this README describes the target architecture.
+
+## Windows installer (ScreenCapture-style)
+
+**Packaging under development:** the feature branch contains a PyInstaller + Inno Setup build that produces `Multi-Agent-AI-Setup.exe`. This is not yet a published or verified release. Once a tagged release has passed Windows CI, download it from [Releases](https://github.com/jtylek/Multi-Agent-AI/releases). The installer installs per user and includes a frozen Python runtime; no Python installation is needed to run it.
+
+Build locally (Windows, Python 3.12 and Inno Setup 6):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
+```
+
+The build creates `dist\Multi-Agent-AI-Setup.exe` when Inno Setup is present; otherwise it produces the portable `dist\Multi-Agent-AI\` directory. GitHub Actions **Build installers** can build an installer artifact manually; pushing a `v*` tag also creates a GitHub Release after tests pass. Do not publish a tag until the build and functional tests have been verified.
+
+After installation, use the Start Menu **Multi-Agent-AI Help** shortcut to open the CLI. The installed executable is `%LOCALAPPDATA%\Programs\Multi-Agent-AI\Multi-Agent-AI.exe`. It does **not** bundle Claude Code, Codex CLI, or GitHub Copilot CLI; install and authenticate these separately for managed provider jobs. The CLI and memory database can be tested without providers.
+
+The Windows installer now includes a **Multi-Agent-AI Control Panel** (Tkinter) with **Discover AI Agents** (local CLI detection/version checks) and **Run Doctor** (read-only environment diagnostics). Select the target Git project folder in the GUI. It does not yet provide task scheduling, agent registration approvals, or a VS Code extension. GUI packaging and Windows execution still require CI verification.
+
+## Linux installation (ScreenCapture-style)
+
+The Linux release archive `multi-agent-ai-linux.tar.gz` contains `install.sh`, `uninstall.sh`, and the Python package source. This is a **per-user installation** into `~/.local/share/multi-agent-ai`; no root privileges are required for the app. Linux requires **Python 3.11+**, `python3-venv`, and `python3-tk` for the GUI (unlike the self-contained Windows executable). On Ubuntu/Mint install system prerequisites with `sudo apt install python3-venv python3-tk`; on older distributions, install Python 3.11+ separately.
+
+```bash
+tar -xzf multi-agent-ai-linux.tar.gz
+cd multi-agent-ai
+./install.sh
+```
+
+If extracted scripts lack executable permission, run `bash install.sh` instead. Start **Multi-Agent-AI** from your desktop applications menu, or run `~/.local/bin/multi-agent-ai-gui`. The CLI is `~/.local/bin/multi-agent-ai`. Remove with `bash uninstall.sh`. Project-local `.multi-agent-ai` databases and task state are preserved.
+
+The Linux GUI uses the same Tkinter source as Windows, with **Discover AI Agents** and **Run Doctor**. The installer does not install third-party provider CLIs. Linux builds and tests must pass CI before a release is considered verified.
+
+## Platform support
+
+**Windows 10/11 and Linux** are target platforms. The shared Python CLI and Tkinter control panel expose provider discovery and Doctor diagnostics on both systems. Windows uses a self-contained installer; Linux uses a per-user Python virtual environment installer. Both packaging workflows are under development and not yet release-verified. Existing Windows-specific field reports remain historical evidence, not Linux compatibility claims.
+
+### Connect AI agents through the GUI
+
+Open **Multi-Agent-AI Control Panel**, select a project folder, and click **Discover AI Agents**. Select a detected **Claude Code**, **Codex CLI**, or **GitHub Copilot CLI** row, then click **Connect Selected Agent**. A separate interactive terminal opens the provider's own login command (Codex: `codex login`; Copilot: `copilot login`; Claude: `claude`, then follow its login prompts). Depending on the installed provider version, the CLI may open a browser or display a device-code URL. Multi-Agent-AI never asks for or stores the provider's password or OAuth tokens.
+
+After completing sign-in, return to the control panel and click **Refresh Connection Status**. The GUI shows **Connected**, **Not connected**, **Not installed**, or **Unknown**. Codex uses its local `login status` command; Claude uses `auth status --json`. Copilot currently displays **Unknown** when installed because a reliable noninteractive status probe has not been implemented. These are local CLI-reported states, not proof that an API request will succeed. Click **Run Doctor** for environment diagnostics. Doctor checks installation and executable versions but **does not verify account authentication**; successful sign-in must be confirmed by the provider CLI or a later authorized test run. The button does not yet persist agent registration, and the login UX has not been verified on both operating systems.
+
+### Free-access and open-source AI agent selector
+
+The GUI **Free / Open Agents** selector includes a curated catalog of Codex CLI, GitHub Copilot CLI, Claude Code, Gemini CLI, Qwen Code, OpenCode, Aider, Goose, OpenHands, Continue, Cline and Roo Code. It displays whether a known CLI executable is detected, links to official installation information, and labels whether an execution adapter exists. **Codex, Copilot and Claude have existing review/implement adapters; Gemini, Qwen, OpenCode, Aider and Goose now have experimental review-only execution adapters.** Implement mode deliberately fails closed for those five pending validated least-privilege profiles. OpenHands, Continue, Cline and Roo Code remain catalog-only. A listed agent being open source does **not** mean its underlying model or hosted API is free. Quotas, subscription eligibility and pricing change and must be checked with each provider; the catalog is not an exhaustive or continuously updated directory.
+
+### Experimental community execution adapters (review-only)
+
+Managed worker adapter classes for `gemini`, `qwen`, `opencode`, `aider`, and `goose` are registered in the runner. They use documented noninteractive CLI entrypoints and existing worker attempt bookkeeping. Review-mode invocation and output parsing have unit tests; **no real-provider end-to-end run or Linux runtime verification has been completed**. The worker runner still depends on Windows-oriented process handling, so these additions **do not establish Linux execution support**.
+
+All five reject `implement` requests with `profile_unconfigured` until reviewed permission profiles can be enforced. Review runs are not a security sandbox: locally configured tools, plugins or extensions may still execute commands or modify files. Run them only in disposable isolated worktrees, inspect diffs, and do not assume a review request prevents side effects. Never auto-merge or push. Authentication and API/model costs depend on each CLI and its configured backend.
+
+CLI patterns are based on official documentation: Gemini `-p ... --output-format json`, Qwen `-p ... --output-format json`, OpenCode `run --agent plan`, Aider `--message ... --chat-mode ask --no-auto-commits`, and Goose `run --no-session -t ...`. Version-specific flags and behavior must be checked in CI and real provider smoke tests.
 
 ## Goals
 
@@ -131,7 +183,7 @@ A successful notification is **not** a successful acknowledgment. An unreachable
 
 The source protocol also defines bounded response watches, cleanup ownership, and handoff notes. These rules should be implemented and tested rather than replaced by uncontrolled mailbox polling.
 
-## Native Windows architecture (planned)
+## Cross-platform runtime architecture (planned)
 
 | Component | Responsibility |
 | --- | --- |
@@ -144,7 +196,7 @@ The source protocol also defines bounded response watches, cleanup ownership, an
 | SQLite ledger | Attempts, failure categories, usage, latency, task outcomes |
 | VS Code integration | Job submission, task board, logs, message and approval UI |
 
-Windows implementation must correctly resolve `.exe`, `.cmd`, and `.bat` entrypoints, manage process trees, stream logs, tolerate UTF-8 BOMs, and classify configuration/authentication failures without blindly retrying. Git worktrees provide editing isolation **but are not a security boundary**.
+On Windows, the implementation must correctly resolve `.exe`, `.cmd`, and `.bat` entrypoints, manage process trees, stream logs, tolerate UTF-8 BOMs, and classify configuration/authentication failures without blindly retrying. Git worktrees provide editing isolation **but are not a security boundary**.
 
 ## Quick start
 
@@ -309,7 +361,7 @@ The order follows decision D15 and [docs/next-milestone.md](docs/next-milestone.
 
 ## Contributing
 
-This repository is being bootstrapped. Initial contributions should focus on reliable Windows execution, protocol compatibility, and reproducible tests. Architectural ideas may be inspired by projects such as Orka, but implementation should be original or reuse code only in accordance with its license.
+This repository is being bootstrapped. Initial contributions should focus on reliable Windows and Linux execution, protocol compatibility, and reproducible tests. Architectural ideas may be inspired by projects such as Orka, but implementation should be original or reuse code only in accordance with its license.
 
 ## License
 

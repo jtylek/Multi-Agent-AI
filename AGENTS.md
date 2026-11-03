@@ -1,3 +1,6 @@
+
+> **Platform scope update (2026-11-02):** Multi-Agent-AI targets **Windows 10/11 and Linux** with one shared Python orchestration engine and Tkinter control panel. Windows uses a PyInstaller/Inno Setup installer; Linux uses a per-user archive installer. Platform-specific notes below describe implementation details or historical Windows tests, **not a Windows-only product restriction**. Linux provider execution and both installers still require end-to-end verification.
+
 # Multi-Agent-AI — Agent Handoff and Architecture
 
 **Audience:** Codex, Claude Code, GitHub Copilot, ChatGPT, and any future AI/developer working on this repository.
@@ -6,7 +9,7 @@
 
 ## 1. Project goal
 
-Build an **open-source, native Windows multi-agent development orchestrator** intended primarily for Visual Studio Code.
+Build an **open-source, cross-platform Windows/Linux multi-agent development orchestrator** intended primarily for Visual Studio Code.
 
 A developer should be able to give **one job to one coordinator agent**. That coordinator plans the work and delegates subtasks to other AI agents/sessions — initially:
 
@@ -24,9 +27,9 @@ Do **not** make an LLM responsible for all orchestration mechanics.
 
 Use two layers:
 
-### Deterministic Windows orchestration service
+### Deterministic cross-platform orchestration service
 
-A persistent native Windows service/process, initially expected to be Python, owns authoritative operational state and mechanics:
+A persistent native Windows/Linux service/process, initially expected to be Python, owns authoritative operational state and mechanics:
 
 - job lifecycle
 - task DAG / dependencies
@@ -69,11 +72,11 @@ This is a recommendation for the present workflow, **not** a permanent vendor-sp
 
 Revisit this when reachability changes or the orchestrator can launch and address managed coordinators itself.
 
-## 3. Windows-first, VS Code-first
+## 3. Windows and Linux, VS Code-first
 
-The primary supported environment is **Windows 10/11**, running natively.
+The target environments are **Windows 10/11 and Linux**, each running natively. Do not introduce OS-specific assumptions into shared code.
 
-Do not require WSL, Docker, or Bash for the core product.
+Do not require WSL or Docker for the core product. Bash is acceptable for Linux packaging, but must not be required on Windows.
 
 The user intends to work from Visual Studio Code with Codex, Claude, and Copilot available there. The desired end state is that a job can be submitted and monitored from VS Code.
 
@@ -505,7 +508,7 @@ Current preferred sequence:
    - revisioned task board
    - durable mailbox
    - tests
-2. **Native Windows runtime**
+2. **Native Windows/Linux runtime**
    - executable discovery
    - provider adapters for Claude, Codex, Copilot
    - streamed logs
@@ -578,7 +581,7 @@ Until the orchestrator can enforce these rules itself:
 5. Add tests with implementation.
 6. Keep provider-specific behavior behind adapters.
 7. Keep core scheduling/protocol models provider-neutral.
-8. Preserve Windows-native support; do not introduce a required Bash/WSL dependency.
+8. Preserve native Windows and Linux support; do not introduce mandatory Bash/WSL dependencies on Windows.
 9. Do not hard-code any project's paths or tools into the generic engine; use project configuration/profile abstractions.
 10. Treat messaging delivery, acknowledgment, work completion, review, and integration as separate states.
 11. Avoid blind retries and token-wasting polling.
@@ -594,7 +597,7 @@ The first executable milestone, in progress as joint task `m0-foundation`, subta
 - typed domain models / schemas for Job, Task, AgentSession, Message, Ack, Reservation, Attempt
 - persistent local state abstraction
 - mailbox implementation compatible with the documented protocol
-- unit tests on Windows-compatible paths
+- unit tests on Windows- and Linux-compatible paths
 - CLI command(s) to initialize a target project state area and inspect jobs/agents/messages
 
 Python 3.11+, standard library only at runtime, `pytest` for development (decisions D1, D10). Before writing a large amount of code, identify any architectural conflicts or missing decisions and record them explicitly. Preserve the distinction between **what has been decided**, **what is proposed**, and **what is already implemented**.
