@@ -13,6 +13,10 @@ if (-not $iscc) {
     $candidate = "$([Environment]::GetFolderPath('ProgramFilesX86'))\Inno Setup 6\ISCC.exe"
     if (Test-Path $candidate) { $iscc = $candidate }
 }
+if (-not $iscc) {
+    $candidate = Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'
+    if (Test-Path $candidate) { $iscc = $candidate }
+}
 if ($iscc) {
     $isccPath = if ($iscc -is [System.Management.Automation.CommandInfo]) { $iscc.Source } else { [string]$iscc }
     & $isccPath "/DAppVersion=$version" packaging\windows.iss
