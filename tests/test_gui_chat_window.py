@@ -38,6 +38,13 @@ def test_hello_world_reaches_each_output_pane(monkeypatch, tmp_path):
             assert all(call[2] == "claude" for call in calls)
             for output in chat.outputs.values():
                 assert "Hello World!" in output.get("1.0", "end")
+            assert "Hello World!" in chat.coordinator_output.get("1.0", "end")
+            assert int(chat.conversation_frame.grid_info()["row"]) == 2
+            assert int(chat.agent_panes.grid_info()["row"]) == 7
+            chat.coordinator_choice.set("Codex")
+            chat._select_coordinator()
+            assert coordinator.get() == "codex"
+            assert "Hello World!" in chat.coordinator_output.get("1.0", "end")
         finally:
             chat.close()
     finally:

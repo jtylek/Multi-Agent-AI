@@ -1,13 +1,16 @@
 """Project chat uses fake provider processes and read-only invocations."""
 
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
 
 from multi_agent_ai.gui_chat import (
     HELLO_WORLD_REQUEST, ChatError, ask_provider, build_chat_prompt, detected_chat_providers,
+    resolve_chat_command,
 )
+from multi_agent_ai import winproc
 
 
 def test_detected_providers_include_only_available_clis():
@@ -17,6 +20,31 @@ def test_detected_providers_include_only_available_clis():
         return name
 
     assert detected_chat_providers(resolve) == ("codex", "claude")
+
+
+def test_copilot_skips_vscode_forwarder_and_runs_npm_shim(monkeypatch, tmp_path):
+    vscode = tmp_path / "VS Code" / "bin" / "copilot-shim"
+    npm = tmp_path / "npm"
+    node = tmp_path / "node"
+    vscode.mkdir(parents=True)
+    npm.mkdir()
+    node.mkdir()
+    (vscode / "copilot.exe").write_bytes(b"forwarder")
+    (npm / "copilot.cmd").write_text(
+        '"%_prog%" "%dp0%\\node_modules\\@github\\copilot\\npm-loader.js" %*',
+        encoding="utf-8")
+    loader = npm / "node_modules" / "@github" / "copilot" / "npm-loader.js"
+    loader.parent.mkdir(parents=True)
+    loader.write_text("", encoding="utf-8")
+    (node / "node.exe").write_bytes(b"node")
+    monkeypatch.setattr(winproc, "IS_WINDOWS", True)
+    monkeypatch.setenv("PATH", os.pathsep.join((str(vscode), str(npm), str(node))))
+
+    resolved = resolve_chat_command("copilot")
+    assert resolved.kind == "npm-shim"
+    assert resolved.path == npm / "copilot.cmd"
+    assert resolved.prefix == (str(node / "node.exe"), str(loader))
+    assert detected_chat_providers() == ("copilot",)
 
 
 @pytest.mark.parametrize("provider", ["codex", "claude", "copilot"])

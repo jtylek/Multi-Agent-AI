@@ -6,6 +6,7 @@ project loading, or tests; tests inject a fake process runner.
 
 from __future__ import annotations
 
+import os
 import tempfile
 import threading
 from pathlib import Path
@@ -27,7 +28,22 @@ class ChatError(RuntimeError):
     """One provider call failed without changing project files."""
 
 
-def detected_chat_providers(resolver: Callable = winproc.resolve_command) -> tuple[str, ...]:
+def resolve_chat_command(provider: str) -> winproc.ResolvedCommand:
+    """Use the actual Copilot CLI on Windows, not VS Code's forwarding shim.
+
+    The VS Code ``copilot-shim/copilot.exe`` can find an npm ``copilot.cmd`` but
+    fails to start that batch file with ``UnsupportedWindowsCommandValue``.
+    ``winproc`` can launch npm's shim directly as ``node.exe npm-loader.js``.
+    """
+    if provider == "copilot" and winproc.IS_WINDOWS:
+        directories = [part for part in os.environ.get("PATH", "").split(os.pathsep) if part]
+        directories = [part for part in directories
+                       if Path(part.strip('"')).name.casefold() != "copilot-shim"]
+        return winproc.resolve_command(provider, path=os.pathsep.join(directories))
+    return winproc.resolve_command(provider)
+
+
+def detected_chat_providers(resolver: Callable = resolve_chat_command) -> tuple[str, ...]:
     found = []
     for provider in COORDINATORS:
         try:
@@ -61,7 +77,7 @@ def build_chat_prompt(project_root: Path, provider: str, coordinator: str,
 def ask_provider(provider: str, project_root: Path, coordinator: str,
                  history: Sequence[tuple[str, str]], message: str, *,
                  cancel: threading.Event | None = None,
-                 resolver: Callable = winproc.resolve_command,
+                 resolver: Callable = resolve_chat_command,
                  runner: Callable = winproc.run,
                  temp_dir: Path | None = None) -> str:
     """Send one read-only turn and return only the provider's final response."""

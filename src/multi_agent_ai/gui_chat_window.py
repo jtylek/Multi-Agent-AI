@@ -17,13 +17,14 @@ class ProjectChatWindow(tk.Toplevel):
     def __init__(self, parent: tk.Misc, project_root: Path, coordinator: tk.StringVar):
         super().__init__(parent)
         self.title("Project AI chat")
-        self.geometry("1200x680")
-        self.minsize(850, 500)
+        self.geometry("1200x800")
+        self.minsize(850, 600)
         self.transient(parent)
         self.project_root = project_root
         self.coordinator = coordinator
         self.providers = detected_chat_providers()
         self.history: dict[str, list[tuple[str, str]]] = {name: [] for name in self.providers}
+        self.transcripts: dict[str, list[tuple[str, str]]] = {name: [] for name in self.providers}
         self.outputs: dict[str, scrolledtext.ScrolledText] = {}
         self.events: queue.Queue[tuple[str, str, str, str]] = queue.Queue()
         self.pending: set[str] = set()
@@ -31,9 +32,12 @@ class ProjectChatWindow(tk.Toplevel):
 
         outer = ttk.Frame(self, padding=12)
         outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text=f"Project: {project_root}").pack(anchor="w")
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(2, weight=2)
+        outer.rowconfigure(7, weight=1)
+        ttk.Label(outer, text=f"Project: {project_root}").grid(row=0, column=0, sticky="w")
         controls = ttk.Frame(outer)
-        controls.pack(fill="x", pady=(8, 10))
+        controls.grid(row=1, column=0, sticky="ew", pady=(8, 10))
         ttk.Label(controls, text="Coordinator:").pack(side="left")
         choices = [PROVIDER_LABELS[name] for name in self.providers]
         current = self.coordinator.get()
@@ -46,20 +50,17 @@ class ProjectChatWindow(tk.Toplevel):
         self.coordinator_choice.bind("<<ComboboxSelected>>", self._select_coordinator)
         ttk.Label(controls, text="Calls use provider quota and read-only project access.").pack(side="left")
 
-        panes = ttk.PanedWindow(outer, orient="horizontal")
-        panes.pack(fill="both", expand=True)
-        for provider in self.providers:
-            panel = ttk.LabelFrame(panes, text=f"{PROVIDER_LABELS[provider]} output", padding=5)
-            panes.add(panel, weight=1)
-            output = scrolledtext.ScrolledText(panel, wrap="word", state="disabled")
-            output.pack(fill="both", expand=True)
-            self.outputs[provider] = output
+        conversation = ttk.LabelFrame(outer, text="Coordinator conversation", padding=5)
+        conversation.grid(row=2, column=0, sticky="nsew")
+        self.conversation_frame = conversation
+        self.coordinator_output = scrolledtext.ScrolledText(conversation, wrap="word", state="disabled")
+        self.coordinator_output.pack(fill="both", expand=True)
 
-        ttk.Label(outer, text="Message:").pack(anchor="w", pady=(10, 2))
+        ttk.Label(outer, text="Message:").grid(row=3, column=0, sticky="w", pady=(10, 2))
         self.input = tk.Text(outer, height=3, wrap="word")
-        self.input.pack(fill="x")
+        self.input.grid(row=4, column=0, sticky="ew")
         actions = ttk.Frame(outer)
-        actions.pack(fill="x", pady=(8, 0))
+        actions.grid(row=5, column=0, sticky="ew", pady=(8, 10))
         self.coordinator_button = ttk.Button(actions, text="Send to Coordinator",
                                              command=self.send_to_coordinator)
         self.coordinator_button.pack(side="left")
@@ -71,9 +72,21 @@ class ProjectChatWindow(tk.Toplevel):
         self.cancel_button = ttk.Button(actions, text="Cancel", command=self.cancel_requests,
                                         state="disabled")
         self.cancel_button.pack(side="left", padx=(8, 0))
+
+        ttk.Label(outer, text="AI agent outputs:").grid(row=6, column=0, sticky="w")
+        panes = ttk.PanedWindow(outer, orient="horizontal")
+        panes.grid(row=7, column=0, sticky="nsew", pady=(4, 0))
+        self.agent_panes = panes
+        for provider in self.providers:
+            panel = ttk.LabelFrame(panes, text=f"{PROVIDER_LABELS[provider]} output", padding=5)
+            panes.add(panel, weight=1)
+            output = scrolledtext.ScrolledText(panel, wrap="word", state="disabled")
+            output.pack(fill="both", expand=True)
+            self.outputs[provider] = output
+
         self.status = tk.StringVar(value=(f"Detected {len(self.providers)} agent(s)."
                                           if self.providers else "No supported agent CLI detected."))
-        ttk.Label(outer, textvariable=self.status).pack(anchor="w", pady=(8, 0))
+        ttk.Label(outer, textvariable=self.status).grid(row=8, column=0, sticky="w", pady=(8, 0))
         if not self.providers:
             self._set_sending(False)
         self.protocol("WM_DELETE_WINDOW", self.close)
@@ -85,14 +98,27 @@ class ProjectChatWindow(tk.Toplevel):
         for provider, display in PROVIDER_LABELS.items():
             if display == label:
                 self.coordinator.set(provider)
+                self._render_coordinator()
                 break
 
+    def _render_coordinator(self):
+        output = self.coordinator_output
+        output.configure(state="normal")
+        output.delete("1.0", "end")
+        for speaker, text in self.transcripts.get(self.coordinator.get(), ()):
+            output.insert("end", f"{speaker}: {text}\n\n")
+        output.see("end")
+        output.configure(state="disabled")
+
     def _append(self, provider: str, speaker: str, text: str):
+        self.transcripts[provider].append((speaker, text))
         output = self.outputs[provider]
         output.configure(state="normal")
         output.insert("end", f"{speaker}: {text}\n\n")
         output.see("end")
         output.configure(state="disabled")
+        if provider == self.coordinator.get():
+            self._render_coordinator()
 
     def _set_sending(self, sending: bool):
         state = "disabled" if sending or not self.providers else "normal"
