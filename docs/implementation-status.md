@@ -6,7 +6,7 @@
 **Project status: Under active development (resumed 2026-11-02).** The persistent-memory subsystem is in development; it is not yet a validated Windows release. The existing job driver still requires a real-provider end-to-end trial.
 
 
-- **GUI connection workflow (developer preview):** Select a discovered provider and click **Connect Selected Agent**. The GUI launches the provider's own interactive login CLI in a terminal; browser/device-code handling remains provider-owned. No credentials are collected or stored by the GUI. This does not yet constitute authenticated registry enrollment or verified login status.
+- **GUI project setup and connection workflow (developer preview):** **Initialize Project** creates the selected project's state root, starter profile, and SQLite index using the same state initializer as the CLI. Select a discovered provider and click **Connect Selected Agent** to launch its own interactive login CLI in a terminal; browser/device-code handling remains provider-owned. No credentials are collected or stored by the GUI. This does not yet constitute authenticated registry enrollment or verified login status.
 
 ## Persistent memory M1 (development branch)
 

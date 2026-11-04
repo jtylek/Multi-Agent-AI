@@ -11,7 +11,16 @@ from tkinter import filedialog, messagebox, ttk
 
 from . import doctor, provider_auth
 from .agent_catalog import CATALOG
-from .state import resolve_state_root
+from .state import init_state_root, resolve_state_root
+
+
+def initialize_project_state(project_root: Path) -> list[tuple[str, str, str, str]]:
+    """Use the same state initialization as ``multi-agent-ai init``."""
+    root = init_state_root(project_root)
+    return [
+        ("State root", "ok", "", str(root.path)),
+        ("State index", "ok", "", str(root.database_path)),
+    ]
 
 
 class ControlPanel(tk.Tk):
@@ -32,6 +41,8 @@ class ControlPanel(tk.Tk):
         ttk.Label(project_row, text="Project folder:").pack(side="left")
         ttk.Entry(project_row, textvariable=self.project).pack(side="left", fill="x", expand=True, padx=8)
         ttk.Button(project_row, text="Browse…", command=self.browse).pack(side="left")
+        self.init_button = ttk.Button(project_row, text="Initialize Project", command=self.initialize_project)
+        self.init_button.pack(side="left", padx=(8, 0))
         actions = ttk.Frame(outer)
         actions.pack(fill="x", pady=8)
         self.discover_button = ttk.Button(actions, text="Discover AI Agents", command=self.discover)
@@ -66,7 +77,7 @@ class ControlPanel(tk.Tk):
         if path:
             self.project.set(path)
 
-    def start(self, label, task):
+    def start(self, label, task, *, completion=None):
         if self.busy:
             return
         root = Path(self.project.get()).expanduser().resolve()
@@ -79,12 +90,17 @@ class ControlPanel(tk.Tk):
         self.discover_button.configure(state="disabled")
         self.doctor_button.configure(state="disabled")
         self.refresh_button.configure(state="disabled")
+        self.init_button.configure(state="disabled")
         def worker():
             try:
-                self.events.put(("result", task(root)))
+                self.events.put(("result", (task(root), completion)))
             except Exception as exc:
                 self.events.put(("error", str(exc)))
         threading.Thread(target=worker, daemon=True).start()
+
+    def initialize_project(self):
+        self.start("Initializing project", initialize_project_state,
+                   completion="Project initialized. State root and SQLite index are ready.")
 
     def discover(self):
         def task(root):
@@ -180,14 +196,16 @@ class ControlPanel(tk.Tk):
                     self.status.set("Operation failed")
                     messagebox.showerror("Multi-Agent-AI", payload)
                 else:
-                    for name, status, connection, detail in payload:
+                    rows, completion = payload
+                    for name, status, connection, detail in rows:
                         self.table.insert("", "end", values=(name, status, connection, detail),
                                           tags=(status,))
-                    self.status.set(f"Completed: {len(payload)} checks")
+                    self.status.set(completion or f"Completed: {len(rows)} checks")
                 self.busy = False
                 self.discover_button.configure(state="normal")
                 self.doctor_button.configure(state="normal")
                 self.refresh_button.configure(state="normal")
+                self.init_button.configure(state="normal")
         except queue.Empty:
             pass
         self.after(100, self.poll)

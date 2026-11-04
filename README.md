@@ -22,7 +22,7 @@ The build creates `dist\Multi-Agent-AI-Setup.exe` when Inno Setup is present; ot
 
 After installation, use the Start Menu **Multi-Agent-AI Help** shortcut to open the CLI. The installed executable is `%LOCALAPPDATA%\Programs\Multi-Agent-AI\Multi-Agent-AI.exe`. It does **not** bundle Claude Code, Codex CLI, or GitHub Copilot CLI; install and authenticate these separately for managed provider jobs. The CLI and memory database can be tested without providers.
 
-The Windows installer now includes a **Multi-Agent-AI Control Panel** (Tkinter) with **Discover AI Agents** (local CLI detection/version checks) and **Run Doctor** (read-only environment diagnostics). Select the target Git project folder in the GUI. It does not yet provide task scheduling, agent registration approvals, or a VS Code extension. GUI packaging and Windows execution still require CI verification.
+The Windows installer includes a **Multi-Agent-AI Control Panel** (Tkinter). Select a Git project folder and click **Initialize Project** to create its `.multi-agent-ai/` state root, starter profile, and SQLite index (the same operation as `multi-agent-ai init`). Keep `.multi-agent-ai/` excluded from that project's Git repository. **Discover AI Agents** checks local CLI installations and **Run Doctor** reports environment diagnostics. The GUI does not yet provide task scheduling, agent registration approvals, or a VS Code extension. GUI packaging and Windows execution still require CI verification.
 
 ## Linux installation (ScreenCapture-style)
 
