@@ -13,6 +13,17 @@ from . import doctor, provider_auth
 from .agent_catalog import CATALOG
 from .state import init_state_root, resolve_state_root
 
+PROJECT_URL = "https://github.com/jtylek/Multi-Agent-AI"
+ABOUT_TEXT = (
+    "Multi-Agent-AI\n"
+    "Free software under the MIT License.\n"
+    "Copyright (c) 2026 by Janusz Tylek"
+)
+
+
+def open_project_repository() -> None:
+    webbrowser.open(PROJECT_URL)
+
 
 def initialize_project_state(project_root: Path) -> list[tuple[str, str, str, str]]:
     """Use the same state initialization as ``multi-agent-ai init``."""
@@ -34,7 +45,10 @@ class ControlPanel(tk.Tk):
         self.busy = False
         outer = ttk.Frame(self, padding=16)
         outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text="Multi-Agent-AI", font=("Segoe UI", 18, "bold")).pack(anchor="w")
+        header = ttk.Frame(outer)
+        header.pack(fill="x")
+        ttk.Label(header, text="Multi-Agent-AI", font=("Segoe UI", 18, "bold")).pack(side="left")
+        ttk.Button(header, text="About", command=self.show_about).pack(side="right")
         ttk.Label(outer, text="Local AI provider discovery and environment diagnostics").pack(anchor="w", pady=(0, 12))
         project_row = ttk.Frame(outer)
         project_row.pack(fill="x", pady=6)
@@ -76,6 +90,18 @@ class ControlPanel(tk.Tk):
         path = filedialog.askdirectory(initialdir=self.project.get())
         if path:
             self.project.set(path)
+
+    def show_about(self):
+        window = tk.Toplevel(self)
+        window.title("About Multi-Agent-AI")
+        window.resizable(False, False)
+        window.transient(self)
+        frame = ttk.Frame(window, padding=20)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text=ABOUT_TEXT, justify="left").pack(anchor="w")
+        ttk.Label(frame, text=PROJECT_URL).pack(anchor="w", pady=(12, 4))
+        ttk.Button(frame, text="Open GitHub repository", command=open_project_repository).pack(anchor="w")
+        ttk.Button(frame, text="Close", command=window.destroy).pack(anchor="e", pady=(16, 0))
 
     def start(self, label, task, *, completion=None):
         if self.busy:

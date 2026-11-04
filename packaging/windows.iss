@@ -10,6 +10,7 @@ AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher=Multi-Agent-AI contributors
 AppPublisherURL=https://github.com/jtylek/Multi-Agent-AI
+AppCopyright=Copyright (c) 2026 Janusz Tylek
 DefaultDirName={localappdata}\Programs\Multi-Agent-AI
 DefaultGroupName=Multi-Agent-AI
 PrivilegesRequired=lowest
@@ -23,6 +24,7 @@ UninstallDisplayIcon={app}\{#AppExe}
 [Files]
 Source: "..\dist\Multi-Agent-AI\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\dist\Multi-Agent-AI-GUI\*"; DestDir: "{app}\GUI"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Multi-Agent-AI Control Panel"; Filename: "{app}\GUI\Multi-Agent-AI-GUI.exe"; WorkingDir: "{userdocs}"
@@ -35,4 +37,7 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 
 [Icons]
 Name: "{autodesktop}\Multi-Agent-AI"; Filename: "{app}\GUI\Multi-Agent-AI-GUI.exe"; Tasks: desktopicon
+
+[Run]
+Filename: "{app}\GUI\Multi-Agent-AI-GUI.exe"; Description: "Launch Multi-Agent-AI Control Panel"; Flags: postinstall nowait skipifsilent
 
