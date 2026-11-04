@@ -1,4 +1,5 @@
 """Login actions must not capture credentials or invoke providers during discovery."""
+import sys
 import pytest
 from multi_agent_ai import provider_auth
 
@@ -18,4 +19,5 @@ def test_login_arguments(monkeypatch):
     monkeypatch.setattr(provider_auth.shutil, "which", lambda name: "/usr/bin/" + name)
     assert provider_auth.login_command("codex")[-1] == "login"
     assert provider_auth.login_command("copilot")[-1] == "login"
-    assert provider_auth.login_command("claude") == ["/usr/bin/claude"]
+    suffix = ".cmd" if sys.platform == "win32" else ""
+    assert provider_auth.login_command("claude") == ["/usr/bin/claude" + suffix]

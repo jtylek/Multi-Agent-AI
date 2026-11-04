@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from test_workers_runner import GIT, env, only_fakes, task_dir  # noqa: F401 (fixtures)
+from test_workers_runner import GIT, env, only_fakes, primary_template, task_dir  # noqa: F401 (fixtures)
 
 from multi_agent_ai.board import read_statuses
 from multi_agent_ai.cli import main

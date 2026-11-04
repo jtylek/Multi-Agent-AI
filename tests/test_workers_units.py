@@ -96,19 +96,23 @@ def all_generated_argvs():
     for name, factory in ADAPTERS.items():
         for mode in ("review", "implement"):
             for model in (None, "m"):
-                yield name, mode, list(factory().build_invocation(request(mode, model)).args)
+                try:
+                    invocation = factory().build_invocation(request(mode, model))
+                except ProfileUnconfigured:
+                    continue  # Some community adapters deliberately support review only.
+                yield name, mode, list(invocation.args)
 
 
 def test_no_adapter_argv_contains_a_bypass_flag():
-    seen = 0
+    seen: dict[str, int] = {}
     for name, mode, argv in all_generated_argvs():
-        seen += 1
+        seen[name] = seen.get(name, 0) + 1
         assert forbidden_in(argv) == [], (name, mode, argv)
         for arg in argv:
             low = arg.lower()
             assert "allow-all" not in low and "yolo" not in low and "dangerously" not in low, arg
             assert "danger-full-access" not in low and "full-auto" not in low, arg
-    assert seen == len(ADAPTERS) * 4
+    assert all(seen.get(name, 0) >= 2 for name in ADAPTERS)
 
 
 def test_forbidden_detection_covers_equals_form_and_sandbox_value():
