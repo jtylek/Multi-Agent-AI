@@ -105,23 +105,33 @@ def only_fakes(monkeypatch, tmp_path):
     yield
 
 
+@pytest.fixture(scope="session")
+def primary_template(tmp_path_factory):
+    """One committed repository built once per session; each test copies it (a directory copy
+    replaces ~9 git processes per test; the copy shares nothing with the template or other tests)."""
+    root = tmp_path_factory.mktemp("primary-template")
+    primary = root / "Primary Checkout"
+    primary.mkdir()
+    git(primary, "init", "-q", "-b", "main", "--template=")
+    hooks = root / "no hooks"
+    hooks.mkdir()
+    for key, value in (("user.name", "Test User"), ("user.email", "test@example.invalid"),
+                       ("commit.gpgsign", "false"), ("core.hooksPath", str(hooks)),
+                       ("core.autocrlf", "false")):
+        git(primary, "config", key, value)
+    (primary / ".gitignore").write_text(".multi-agent-ai/\n__pycache__/\n", encoding="utf-8")
+    (primary / "README.md").write_text("hello\n", encoding="utf-8")
+    git(primary, "add", "-A")
+    git(primary, "commit", "-q", "-m", "base")
+    return primary, git(primary, "rev-parse", "HEAD")
+
+
 class Env:
-    def __init__(self, tmp_path: Path):
+    def __init__(self, tmp_path: Path, template):
         self.tmp = tmp_path
         self.primary = tmp_path / "Primary Checkout"
-        self.primary.mkdir()
-        git(self.primary, "init", "-q", "-b", "main")
-        hooks = tmp_path / "no hooks"
-        hooks.mkdir()
-        for key, value in (("user.name", "Test User"), ("user.email", "test@example.invalid"),
-                           ("commit.gpgsign", "false"), ("core.hooksPath", str(hooks)),
-                           ("core.autocrlf", "false")):
-            git(self.primary, "config", key, value)
-        (self.primary / ".gitignore").write_text(".multi-agent-ai/\n__pycache__/\n", encoding="utf-8")
-        (self.primary / "README.md").write_text("hello\n", encoding="utf-8")
-        git(self.primary, "add", "-A")
-        git(self.primary, "commit", "-q", "-m", "base")
-        self.base = git(self.primary, "rev-parse", "HEAD")
+        shutil.copytree(template[0], self.primary)
+        self.base = template[1]
         self.worktree = tmp_path / "wt T1"
         git(self.primary, "worktree", "add", "-q", "-b", "task/demo/T1", str(self.worktree))
         self.root = init_state_root(self.primary)
@@ -168,8 +178,8 @@ class Env:
 
 
 @pytest.fixture
-def env(tmp_path):
-    return Env(tmp_path)
+def env(tmp_path, primary_template):
+    return Env(tmp_path, primary_template)
 
 
 def task_dir(env):
