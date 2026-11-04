@@ -11,6 +11,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from . import doctor, provider_auth
 from .agent_catalog import CATALOG
+from .gui_projects import ProjectLibrary, load_projects, remember_project
 from .state import init_state_root, resolve_state_root
 
 PROJECT_URL = "https://github.com/jtylek/Multi-Agent-AI"
@@ -40,7 +41,16 @@ class ControlPanel(tk.Tk):
         self.title("Multi-Agent-AI Control Panel")
         self.geometry("900x590")
         self.minsize(700, 450)
-        self.project = tk.StringVar(value=str(Path.cwd()))
+        try:
+            self.projects = load_projects()
+            settings_error = None
+        except ValueError as exc:
+            self.projects = ProjectLibrary(None, (), {})
+            settings_error = str(exc)
+        current = self.projects.current
+        initial = current if current and Path(current).is_dir() else str(Path.cwd())
+        self.project = tk.StringVar(value=initial)
+        self.coordinator = tk.StringVar(value=self.projects.coordinator_for(initial))
         self.events: queue.Queue = queue.Queue()
         self.busy = False
         outer = ttk.Frame(self, padding=16)
@@ -57,6 +67,17 @@ class ControlPanel(tk.Tk):
         ttk.Button(project_row, text="Browse…", command=self.browse).pack(side="left")
         self.init_button = ttk.Button(project_row, text="Initialize Project", command=self.initialize_project)
         self.init_button.pack(side="left", padx=(8, 0))
+        project_actions = ttk.Frame(outer)
+        project_actions.pack(fill="x", pady=(0, 4))
+        ttk.Button(project_actions, text="Save Project", command=self.save_project).pack(side="left")
+        ttk.Button(project_actions, text="Open Project", command=self.open_project).pack(side="left", padx=(8, 0))
+        self.recent_button = ttk.Menubutton(project_actions, text="Open Recent")
+        self.recent_button.pack(side="left", padx=(8, 0))
+        self.recent_menu = tk.Menu(self.recent_button, tearoff=False)
+        self.recent_button.configure(menu=self.recent_menu)
+        self.refresh_recent()
+        self.chat_button = ttk.Button(project_actions, text="Project AI chat", command=self.open_project_chat)
+        self.chat_button.pack(side="left", padx=(8, 0))
         actions = ttk.Frame(outer)
         actions.pack(fill="x", pady=8)
         self.discover_button = ttk.Button(actions, text="Discover AI Agents", command=self.discover)
@@ -70,7 +91,7 @@ class ControlPanel(tk.Tk):
         self.catalog_button = ttk.Button(actions, text="Free / Open Agents", command=self.show_catalog)
         self.catalog_button.pack(side="left", padx=(8, 0))
         ttk.Label(outer, text="Select a discovered provider row, then Connect. Sign-in is handled by the provider in a separate terminal/browser.").pack(anchor="w")
-        self.status = tk.StringVar(value="Ready. Select your project folder.")
+        self.status = tk.StringVar(value=settings_error or "Ready. Select your project folder.")
         ttk.Label(outer, textvariable=self.status).pack(anchor="w", pady=(4, 8))
         self.table = ttk.Treeview(outer, columns=("provider", "status", "connection", "details"), show="headings")
         for key, label, width in (("provider", "Provider / Check", 190),
@@ -90,6 +111,51 @@ class ControlPanel(tk.Tk):
         path = filedialog.askdirectory(initialdir=self.project.get())
         if path:
             self.project.set(path)
+            self.coordinator.set(self.projects.coordinator_for(path))
+
+    def refresh_recent(self):
+        self.recent_menu.delete(0, "end")
+        available = [path for path in self.projects.recent if Path(path).is_dir()]
+        if not available:
+            self.recent_menu.add_command(label="No recent projects", state="disabled")
+        for path in available:
+            self.recent_menu.add_command(label=path,
+                                         command=lambda selected=path: self.open_project_path(selected))
+
+    def open_project_path(self, folder):
+        try:
+            self.projects = remember_project(folder)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Open Project", str(exc))
+            return
+        self.project.set(self.projects.current)
+        self.coordinator.set(self.projects.coordinator_for(self.projects.current))
+        self.refresh_recent()
+        self.status.set(f"Opened project: {self.projects.current}")
+
+    def open_project(self):
+        path = filedialog.askdirectory(initialdir=self.project.get())
+        if path:
+            self.open_project_path(path)
+
+    def save_project(self):
+        try:
+            self.projects = remember_project(self.project.get(), self.coordinator.get())
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Save Project", str(exc))
+            return
+        self.project.set(self.projects.current)
+        self.refresh_recent()
+        self.status.set(f"Saved project: {self.projects.current}")
+
+    def open_project_chat(self):
+        root = Path(self.project.get()).expanduser().resolve()
+        if not root.is_dir():
+            messagebox.showerror("Project AI chat", "Select an existing project folder.")
+            return
+        from .gui_chat_window import ProjectChatWindow
+
+        ProjectChatWindow(self, root, self.coordinator)
 
     def show_about(self):
         window = tk.Toplevel(self)
@@ -117,6 +183,7 @@ class ControlPanel(tk.Tk):
         self.doctor_button.configure(state="disabled")
         self.refresh_button.configure(state="disabled")
         self.init_button.configure(state="disabled")
+        self.chat_button.configure(state="disabled")
         def worker():
             try:
                 self.events.put(("result", (task(root), completion)))
@@ -232,6 +299,7 @@ class ControlPanel(tk.Tk):
                 self.doctor_button.configure(state="normal")
                 self.refresh_button.configure(state="normal")
                 self.init_button.configure(state="normal")
+                self.chat_button.configure(state="normal")
         except queue.Empty:
             pass
         self.after(100, self.poll)
