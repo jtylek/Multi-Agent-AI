@@ -7,3 +7,9 @@ __pycache__/
 .venv/
 *.egg-info/
 .pytest_cache/
+
+# Generated Windows installer artifacts
+build/
+dist/
+Multi-Agent-AI.spec
+Multi-Agent-AI-GUI.spec
