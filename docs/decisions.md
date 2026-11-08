@@ -223,6 +223,31 @@ dry run unless `--execute`. Rules fixed by the coordinator's answers to the desi
   (the runner refuses awkward prompts through batch files, T12); independent subtasks are integrated in completion order
   (the report says so); `append_event` re-reads the event file on every event (O(n^2), fine for the MVP, TODO).
 
+## D20. Project AI Chat activity log and team-task demo: Decided (user), 2026-11-08
+
+The user asked to see in Live Activity what happens when they use Project AI Chat, and for a
+proof of concept of a coordinator dispatching work. Implemented (`chat_log.py`, `gui_chat.py`,
+`team_demo.py`, `activity.py`):
+
+- Each chat window in an **initialized** project appends to
+  `<state-root>/chat/<session-id>/events.jsonl` (formats.md section 10). The chat never creates a
+  state root itself; in an uninitialized project it says activity is not recorded.
+- The log stores the user's messages and the agents' replies (cut to 20,000 characters). The state
+  root is excluded from Git; do not type secrets into the chat.
+- Live provider events are read from the provider's stdout while it runs: Codex `--json`, Claude
+  `--output-format=stream-json --verbose` (chat call only; the worker adapter keeps plain JSON)
+  and Copilot `--output-format json`. **Copilot's JSONL schema is unverified**: its events are
+  summarised generically and its reply is found with `final_message_from_events`; when no reply is
+  found the chat fails with the event types it saw rather than guessing.
+- Times in this log have second precision (`YYYY-MM-DD HH:MM:SS`, local): it is an activity log,
+  not a coordination file, so D7's minute precision is not enough to order live events.
+- The **team task** demo ("Team task: Python calculator") is read-only throughout. The coordinator
+  returns a JSON plan (unusable plan: a built-in split, logged as `plan_fallback`); subtasks run in
+  parallel; the coordinator integrates; the orchestrator saves `team-task/calculator.py` in the
+  session folder and only compiles it, never runs it. Dispatch is logged in the chat log, **not** as
+  mailbox requests: read-only workers cannot write their own acknowledgment, and writing one for
+  them would be fake evidence (section 7 of AGENTS.md).
+
 ## Open
 
 - **O2. Registry.** Implemented in `src/multi_agent_ai/registry.py` with the `registry` CLI and

@@ -331,3 +331,29 @@ disagreeing lines give `unparsed`, which never passes the integration gate. It i
 claim, not independently verified, and it is never inferred from prose or the exit code. A review run
 that changed files fails (`review_modified_files`) and writes no review file, so that failure always
 outranks an `agreed` verdict.
+
+## 10. Chat session logs
+
+`<state-root>/chat/<session-id>/events.jsonl` is written only by the Project AI Chat window (decision
+D20). It is an append-only activity log, not a coordination file: no agent reads it as an
+instruction and nothing in it implies delivery, agreement or completion.
+
+- `session-id`: `chat-YYYYMMDD-HHMMSS-<4 hex>` (local time the window opened).
+- One JSON object per line, UTF-8, with at least `seq` (1, 2, … per session), `at`
+  (`YYYY-MM-DD HH:MM:SS` local), `kind`, `session` and a one-line `summary`. Lines are readable by
+  the job-event reader (`job.read_events`).
+- `provider` names the agent an event concerns, when there is one.
+- Kinds written by the window: `session_started`, `message_sent` (`recipients`, `coordinator`,
+  `text`), `reply_received` (`text`), `chat_error` (`error`), `cancel_requested`, `session_closed`.
+- Kinds written per provider call: `provider_started` (`role`, `profile`, `prompt_characters`,
+  `live_events`; the prompt itself is not logged), live events parsed from the provider's output
+  (`provider_session`, `tool_use`, `tool_result`, `command`, `command_finished`, `reasoning`,
+  `assistant_text`, `file_change`, `web_search`, `provider_error`, `provider_event`; each may carry a
+  `detail` of up to 2,000 characters), and `provider_finished` (`outcome`: `ok | cancelled |
+  timed_out | launch_error | exit_nonzero`, `exit_code`, `duration_seconds`, `usage`, optional
+  `provider_reported_cost_usd`, `stderr_tail`, `event_types`).
+- Kinds written by the team-task demo: `team_task_started`, `plan_received` | `plan_fallback`
+  (`assignments`), `task_dispatched` (`subtask`, `brief`), `subtask_completed` | `subtask_failed`,
+  `integration_started`, `result_saved` (`path`, `compiles`), `team_task_finished` (`outcome`). Its
+  output file is `<session folder>/team-task/calculator.py`.
+- Readers ignore unknown kinds and fields; Live Activity shows an unknown kind as `Chat: <kind>`.

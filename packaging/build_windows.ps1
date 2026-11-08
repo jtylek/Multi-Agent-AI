@@ -2,11 +2,13 @@
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path -Parent $PSScriptRoot)
 $version = (Select-String -Path pyproject.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
-python -m pip install --upgrade pyinstaller tzdata .
+# The project itself is not pip-installed here: that would replace a developer's editable install
+# (pip install -e .) with a frozen copy. The runtime is stdlib-only, so --paths src is enough.
+python -m pip install --upgrade pyinstaller tzdata
 if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
-python -m PyInstaller --noconfirm --clean --onedir --console --name Multi-Agent-AI --collect-submodules multi_agent_ai --collect-all tzdata packaging\launcher.py
+python -m PyInstaller --noconfirm --clean --onedir --console --paths src --name Multi-Agent-AI --collect-submodules multi_agent_ai --collect-all tzdata packaging\launcher.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
-python -m PyInstaller --noconfirm --clean --onedir --windowed --name Multi-Agent-AI-GUI --collect-submodules multi_agent_ai --collect-all tzdata packaging\gui_launcher.py
+python -m PyInstaller --noconfirm --clean --onedir --windowed --paths src --name Multi-Agent-AI-GUI --collect-submodules multi_agent_ai --collect-all tzdata packaging\gui_launcher.py
 if ($LASTEXITCODE -ne 0) { throw "GUI PyInstaller failed" }
 $iscc = Get-Command iscc -ErrorAction SilentlyContinue
 if (-not $iscc) {
