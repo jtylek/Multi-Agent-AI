@@ -8,7 +8,12 @@ project on hold. This records what went wrong in practice and what is recommende
 decision: recommendations are **proposed**, not decided or implemented. Decisions belong in
 [decisions.md](decisions.md); the implemented state is in [implementation-status.md](implementation-status.md).
 
-## Project status: on hold
+## Project status: under active development
+
+The project is under active development (resumed 2026-11-02 after a pause from 2026-10-20). For the
+current state and next steps see the "Status update" section of [next-milestone.md](next-milestone.md).
+
+### State at the pause (2026-10-20)
 
 The user put the project on hold on 2026-10-20 because it takes too much of their time, and will return
 to it later. State at that point:

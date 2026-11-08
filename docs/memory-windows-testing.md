@@ -7,12 +7,11 @@
 
 ## Prerequisites
 
-Windows 10/11, Git, Python 3.12 (with `py` launcher), PowerShell, and a local clone of the `feature/persistent-memory-m1` branch.
+Windows 10/11, Git, Python 3.12 (with `py` launcher), PowerShell, and a local clone of `main` (the former `feature/persistent-memory-m1` branch has been merged).
 
 ```powershell
 git clone https://github.com/jtylek/Multi-Agent-AI.git
 cd Multi-Agent-AI
-git checkout feature/persistent-memory-m1
 py -3.12 -m venv .venv
 .\.venv\Scripts\python -m pip install -e ".[dev]"
 .\.venv\Scripts\python -m pytest -q

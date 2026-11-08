@@ -4,7 +4,7 @@
 # AI Persistent Memory — Architecture and Implementation Plan
 
 **Project:** Multi-Agent-AI  
-**Status:** Proposed design; not implemented  
+**Status:** Design proposed; a first slice of M1 is implemented on `main` (developer preview, see section 14)  
 **Target:** Native Windows 10/11 and Linux, Python >=3.11, VS Code, Claude Code, Codex CLI and Copilot CLI  
 **Scope:** Project-neutral persistent knowledge shared by managed agents across tasks, sessions, restarts, and providers.
 
@@ -267,3 +267,74 @@ Prefer minimal changes to existing `cli.py`, `state.py`, and worker prompt build
 Create implementation work on a separate branch/worktree with a single owner per file. Use fake providers and local tests first. A different agent should review exact commits and rerun verification in a fresh environment. Do not merge or push to `main` without explicit user approval. Follow `AGENTS.md`, `docs/agent-rules.md`, and `docs/protocol/` if this proposal conflicts with established rules.
 
 **Recommended next step:** approve M1 as an implementation task, assign a coordinator, and build the persistence and CLI foundation before attempting automated agent learning.
+
+## 14. Current state, gaps and next steps (2026-11-08)
+
+### What exists on `main`
+
+`src/multi_agent_ai/memory/` (`store.py`, `policy.py`, `context.py`) and the `memory` CLI: a dedicated
+SQLite database with an FTS5 index kept in sync by triggers; `add` (always `proposed`), `get`, `search`
+(project-scoped, `active` only, query quoted as a literal FTS phrase), `promote` (atomic,
+revision-guarded, records an evidence reference), `change_status`, `doctor`; a secret-pattern and
+provenance check; and `build_context`, a project-scoped, size-bounded advisory block. It is covered by
+6 tests (`tests/test_memory_store.py`, `test_memory_policy.py`, `test_memory_cli.py`). Manual smoke
+test: [memory-windows-testing.md](memory-windows-testing.md).
+
+### Gaps against this design
+
+| Area | Gap |
+| --- | --- |
+| Schema | `scope`, `expires_at_utc`, `superseded_by`, `sensitivity` and `memory_events` are missing. There is no migration runner: `initialize()` only inserts version 1. |
+| Connection lifetime | `with self._connect() as db:` commits but does **not close** the connection. On Windows, database and WAL handles stay open, which can block temp-directory cleanup and cause lock errors. Use `contextlib.closing` or an explicit `close()`. |
+| Policy | `change_status()` accepts any status, including `active`, without evidence, so it bypasses `promote()`. It should allow only `retracted` and `superseded`. |
+| Operations | `supersede`, `history` and audit events are not implemented. |
+| `doctor` | Opens the database read-write. Section 10 requires it to be read-only: open with the `file:<path>?mode=ro` URI. |
+| Context | The budget is in characters, not tokens. Records carry no provenance or status labels. It is not wired into worker prompts. |
+| Authorization | Actor names are self-declared (open decision 2, section 12). |
+
+### Implementation steps
+
+1. **Harden the foundation (design M1, no dependency on provider runs):** close connections; add a
+   migration runner (one transaction per version, rollback on failure, recorded in
+   `schema_migrations`); complete the schema; restrict `change_status`; add `supersede`, `history` and
+   `memory_events`; make `doctor` read-only.
+2. **Authorization policy:** decide who may promote records and which evidence classes qualify;
+   record it in [decisions.md](decisions.md).
+3. **Context builder:** token-estimate budget, truncation only at record boundaries, each record
+   labelled with ID, source and confidence; `active` records only; the block is marked as untrusted
+   data.
+4. **Agent integration (design M2, after the first real end-to-end job):** the worker prompt builder
+   calls the context builder behind an opt-in flag; a memory failure never stops a worker. Task
+   outcomes are captured from the job event log after verification and review, keyed on the attempt
+   ID so repeated ingestion has no effect.
+
+### Test plan
+
+Unit tests (pytest, `tmp_path`, no providers):
+
+- **Restart:** write a record, open a new `MemoryStore` (or a subprocess), read it back.
+- **Concurrency** (`multiprocessing`): two processes promote the same record with the same
+  `expected_revision`, and exactly one succeeds while the other gets `MemoryConflict`; N processes
+  each add a record, and the count is N.
+- **Isolation:** a project-A record is invisible to project B through `get`, `search` and
+  `build_context`.
+- **Lifecycle:** proposed and retracted records never appear in search or context; history keeps
+  every revision; FTS finds the updated text after an update.
+- **Migration:** a v1 database fixture opened with v2 code keeps its data and reports the new
+  version; an injected failing migration leaves the database unchanged.
+- **Corruption:** garbage bytes in the database file make `doctor` report a failure, not crash.
+- **Windows handles and locks:** deleting `tmp_path` after store operations succeeds (this catches
+  unclosed connections); a write lock held by another process causes a wait, not an immediate error.
+- **Prompt injection:** content such as "ignore previous instructions" stays inside the labelled
+  block, and the block never exceeds its budget.
+
+Integration tests (the fake workers the job driver tests already use):
+
+- With memory enabled, the prompt file in the run directory contains the memory block; with memory
+  disabled, the prompt is otherwise byte-identical.
+- With a corrupted memory database, the worker still runs.
+- Running outcome ingestion twice leaves one record.
+
+Real-world check: first the manual smoke test in [memory-windows-testing.md](memory-windows-testing.md)
+(no model quota). After real provider runs work, run the demo job with memory enabled and disabled and
+compare success rate, retries and provider-reported tokens (design M3).

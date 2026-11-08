@@ -1,5 +1,50 @@
 # Recommendation: Next Development Milestone for Multi-Agent-AI
 
+## Status update (2026-11-08)
+
+The next milestone is still **M1 — Real Multi-Agent Execution** (acceptance list at the end of this
+file, now marked with the current state). Adaptive routing (M2) and the VS Code UX (M3) stay deferred.
+
+Since this recommendation was written (2026-10-19), most M1 components were built: agent registry
+and reservation checks (`registry.py`), worktree lifecycle manager (T23), Claude worker adapter (T24),
+orchestrator verification (T26), job driver with concurrent workers, cross-provider review,
+dependency-ordered integration and a stop at `awaiting_approval` (T27), plus the demo job generator
+and a GUI Live Activity view. **All of it is tested with fake executables only.** The single real
+provider run so far (Copilot, 1 premium request) failed on the Windows shell tool name and led to T28.
+See [implementation-status.md](implementation-status.md) and [problems.md](problems.md).
+
+### Remaining M1 work, in order
+
+1. **Land the in-progress work:** Live Activity view, chat log and three-provider team demo.
+2. **One real smoke run per provider** on a disposable repository, each with explicit user approval.
+   These settle the open items listed in implementation-status ("Unverified until the first real run"):
+   - Claude: `claude -p` reading the prompt from stdin; whether `PowerShell(...)` permission rules match
+     the model's calls; how `--restricted` and `--safe-mode` interact; JSON result field names;
+     `--session-id` / `--resume`.
+   - Copilot: the Windows `SHELL_TOOL` name and `shell(<command>)` matching; the npm `.cmd` shim launch
+     path; JSONL event and `usage.json` shapes.
+   - Codex: the `--json` usage event shape.
+3. **One real end-to-end job:** the three-provider demo (multiply / divide / tests) through cross-provider
+   review, integration, the full suite on the integration branch, and a stop at `awaiting_approval`
+   ([m1-smoke-test.md](m1-smoke-test.md)).
+4. **Close the known gaps:** `worker run` does not call the workspace preflight yet; there is no
+   `job approve`; T27 notes N1–N3 in problems.md; and a decision on the idle-agent / missing stall
+   detection problem (problems.md 1–2) before interactive sessions are given work again.
+
+### Parallel track: persistent memory
+
+A first slice of the persistent-memory foundation is on `main` (`src/multi_agent_ai/memory/`). Its
+gaps, implementation steps and test plan are in
+[AI-persistent-memory.md, section 14](AI-persistent-memory.md#14-current-state-gaps-and-next-steps-2026-11-08).
+Hardening the store (step 1 there) does not depend on M1 and can proceed in parallel. Prompt injection
+into workers (step 4) should wait until real provider runs work, because only then can its benefit be
+measured.
+
+---
+
+*The rest of this file is the original recommendation of 2026-10-19, kept for its rationale. Its
+"Current assessment" describes the state at that date.*
+
 ## Current assessment
 
 The project has progressed beyond the documentation/bootstrap stage.
@@ -764,23 +809,26 @@ The next milestone should be called something like:
 
 ## M1 — Real Multi-Agent Execution
 
-Acceptance criteria:
+Acceptance criteria (state as of 2026-11-08; "fakes" = implemented and tested with fake
+executables only, not yet shown with a real provider):
 
-- [ ] registry implemented
-- [ ] reservation checks implemented
-- [ ] worktree manager implemented
-- [ ] Claude worker adapter implemented
-- [ ] Codex real smoke test passes
-- [ ] Copilot real smoke test passes
-- [ ] Claude real smoke test passes
-- [ ] orchestrator independently verifies changes
-- [ ] one task executes two or more workers concurrently
-- [ ] cross-agent review works
-- [ ] dependency-ordered integration works
-- [ ] complete suite runs on integration branch
-- [ ] no modification of `main` without user approval
-- [ ] complete run report stored
-- [ ] failed workers leave enough evidence for diagnosis
+- [x] registry implemented (`registry.py`)
+- [x] reservation checks implemented (`registry.py`; the job driver serialises overlapping areas)
+- [x] worktree manager implemented (T23)
+- [x] Claude worker adapter implemented (T24)
+- [ ] Codex real smoke test passes (not run)
+- [ ] Copilot real smoke test passes (one real run failed on the shell tool name; fixed in T28, not re-run)
+- [ ] Claude real smoke test passes (not run)
+- [ ] orchestrator independently verifies changes (T26; fakes)
+- [ ] one task executes two or more workers concurrently (T27; fakes)
+- [ ] cross-agent review works (T27; fakes)
+- [ ] dependency-ordered integration works (T23/T27; fakes)
+- [ ] complete suite runs on integration branch (T27; fakes)
+- [x] no modification of `main` without user approval (job stops at `awaiting_approval`; `job approve` not implemented, the user merges with Git)
+- [ ] complete run report stored (T27; fakes)
+- [ ] failed workers leave enough evidence for diagnosis (runs dir and retained worktrees; fakes)
+
+An item marked "fakes" is ticked only after the real end-to-end job shows it.
 
 Only after M1 should development move to:
 

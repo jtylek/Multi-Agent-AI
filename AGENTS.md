@@ -589,6 +589,11 @@ Until the orchestrator can enforce these rules itself:
 
 ## 26. Near-term work
 
+**Resuming work? Start here:** the current state and the ordered next steps are in the "Status update"
+section at the top of `docs/next-milestone.md` (M1 — Real Multi-Agent Execution, with persistent memory
+as a parallel track in `docs/AI-persistent-memory.md` section 14). What is implemented is in
+`docs/implementation-status.md`; field problems in `docs/problems.md`. The paragraphs below are history.
+
 Status (2026-10-19): the architecture review is done. Conflicts and missing decisions were recorded in `docs/decisions.md`, the protocol and file formats are in `docs/protocol/`, and a coordination skill for agents is in `.agents/skills/agent-mailbox/` (with a Claude Code pointer in `.claude/skills/`). This repository's own development is coordinated through the protocol, with the state root at `.multi-agent-ai/`.
 
 The first executable milestone, in progress as joint task `m0-foundation`, subtask T6:
