@@ -24,9 +24,10 @@ and the generated `plan.md` before a real run. Do not use `--no-venv` for the Wi
 ## 2. Preview, then run
 
 Run the printed `job start` dry-run command. It does not contact providers or change task state.
-Confirm that all three providers are detected and that no `PROBLEM:` lines appear. If Copilot's
-npm `.cmd` shim is selected, the command preview should show `kind: npm-shim` with a `node.exe`
-prefix. A plain `.cmd` that cannot safely pass a quoted prompt must stop with `invalid_arguments`.
+Confirm that all three providers are detected and that no `PROBLEM:` lines appear. The
+Windows Copilot npm `.cmd` launch path is still a specific check for the real trial. An
+unrecognized plain `.cmd` that cannot safely pass a quoted prompt must stop with
+`invalid_arguments`; inspect that attempt's `result.json` for the resolved command kind.
 
 Open the Control Panel, select the disposable project, and click **Live Activity**. Then run
 the printed real-job command in PowerShell. It explicitly includes `--execute` and
