@@ -10,7 +10,6 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from . import doctor, provider_auth
-from .activity import ActivityWatcher
 from .agent_catalog import CATALOG
 from .gui_projects import ProjectLibrary, load_projects, remember_project
 from .state import init_state_root, resolve_state_root
@@ -40,8 +39,8 @@ class ControlPanel(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Multi-Agent-AI Control Panel")
-        self.geometry("900x590")
-        self.minsize(700, 450)
+        self.geometry("960x620")
+        self.minsize(820, 470)
         try:
             self.projects = load_projects()
             settings_error = None
@@ -60,38 +59,55 @@ class ControlPanel(tk.Tk):
         header.pack(fill="x")
         ttk.Label(header, text="Multi-Agent-AI", font=("Segoe UI", 18, "bold")).pack(side="left")
         ttk.Button(header, text="About", command=self.show_about).pack(side="right")
-        ttk.Label(outer, text="Local AI provider discovery and environment diagnostics").pack(anchor="w", pady=(0, 12))
-        project_row = ttk.Frame(outer)
-        project_row.pack(fill="x", pady=6)
-        ttk.Label(project_row, text="Project folder:").pack(side="left")
+        ttk.Label(outer, text="Local AI provider discovery and environment diagnostics").pack(anchor="w", pady=(0, 10))
+        self.chat_window = None
+
+        # Project group (left) and the primary Project AI Chat action (right).
+        top = ttk.Frame(outer)
+        top.pack(fill="x")
+        project_group = ttk.LabelFrame(top, text="Project", padding=8)
+        project_group.pack(side="left", fill="x", expand=True)
+        project_row = ttk.Frame(project_group)
+        project_row.pack(fill="x")
+        ttk.Label(project_row, text="Folder:").pack(side="left")
         ttk.Entry(project_row, textvariable=self.project).pack(side="left", fill="x", expand=True, padx=8)
         ttk.Button(project_row, text="Browse…", command=self.browse).pack(side="left")
-        self.init_button = ttk.Button(project_row, text="Initialize Project", command=self.initialize_project)
-        self.init_button.pack(side="left", padx=(8, 0))
-        project_actions = ttk.Frame(outer)
-        project_actions.pack(fill="x", pady=(0, 4))
-        ttk.Button(project_actions, text="Save Project", command=self.save_project).pack(side="left")
-        ttk.Button(project_actions, text="Open Project", command=self.open_project).pack(side="left", padx=(8, 0))
+        project_actions = ttk.Frame(project_group)
+        project_actions.pack(fill="x", pady=(8, 0))
+        ttk.Button(project_actions, text="Open Project", command=self.open_project).pack(side="left")
         self.recent_button = ttk.Menubutton(project_actions, text="Open Recent")
         self.recent_button.pack(side="left", padx=(8, 0))
         self.recent_menu = tk.Menu(self.recent_button, tearoff=False)
         self.recent_button.configure(menu=self.recent_menu)
         self.refresh_recent()
-        self.chat_button = ttk.Button(project_actions, text="Project AI chat", command=self.open_project_chat)
-        self.chat_button.pack(side="left", padx=(8, 0))
-        actions = ttk.Frame(outer)
-        actions.pack(fill="x", pady=8)
-        self.discover_button = ttk.Button(actions, text="Discover AI Agents", command=self.discover)
-        self.discover_button.pack(side="left", padx=(0, 8))
-        self.doctor_button = ttk.Button(actions, text="Run Doctor", command=self.run_doctor)
-        self.doctor_button.pack(side="left")
-        self.connect_button = ttk.Button(actions, text="Connect Selected Agent", command=self.connect)
+        ttk.Button(project_actions, text="Save Project", command=self.save_project).pack(side="left", padx=(8, 0))
+        self.init_button = ttk.Button(project_actions, text="Initialize Project", command=self.initialize_project)
+        self.init_button.pack(side="left", padx=(8, 0))
+        # A classic tk.Button: ttk's native Windows theme ignores background colours.
+        self.chat_button = tk.Button(top, text="Project AI Chat", command=self.open_project_chat,
+                                     font=("Segoe UI", 13, "bold"), bg="#0b5cad", fg="white",
+                                     activebackground="#084a8c", activeforeground="white",
+                                     disabledforeground="#a9c3df", relief="flat", cursor="hand2",
+                                     padx=22, pady=10)
+        self.chat_button.pack(side="left", fill="y", padx=(12, 0), pady=(7, 0))
+
+        # Agent management and diagnostics groups.
+        tools = ttk.Frame(outer)
+        tools.pack(fill="x", pady=(10, 4))
+        agents_group = ttk.LabelFrame(tools, text="AI agents", padding=8)
+        agents_group.pack(side="left", fill="x", expand=True)
+        self.discover_button = ttk.Button(agents_group, text="Discover AI Agents", command=self.discover)
+        self.discover_button.pack(side="left")
+        self.connect_button = ttk.Button(agents_group, text="Connect Selected Agent", command=self.connect)
         self.connect_button.pack(side="left", padx=(8, 0))
-        self.refresh_button = ttk.Button(actions, text="Refresh Connection Status", command=self.refresh_connections)
+        self.refresh_button = ttk.Button(agents_group, text="Refresh Connection Status", command=self.refresh_connections)
         self.refresh_button.pack(side="left", padx=(8, 0))
-        self.catalog_button = ttk.Button(actions, text="Free / Open Agents", command=self.show_catalog)
+        self.catalog_button = ttk.Button(agents_group, text="Free / Open Agents", command=self.show_catalog)
         self.catalog_button.pack(side="left", padx=(8, 0))
-        ttk.Button(actions, text="Live Activity", command=self.show_activity).pack(side="left", padx=(8, 0))
+        diagnostics_group = ttk.LabelFrame(tools, text="Diagnostics", padding=8)
+        diagnostics_group.pack(side="left", padx=(12, 0))
+        self.doctor_button = ttk.Button(diagnostics_group, text="Run Doctor", command=self.run_doctor)
+        self.doctor_button.pack(side="left")
         ttk.Label(outer, text="Select a discovered provider row, then Connect. Sign-in is handled by the provider in a separate terminal/browser.").pack(anchor="w")
         self.status = tk.StringVar(value=settings_error or "Ready. Select your project folder.")
         ttk.Label(outer, textvariable=self.status).pack(anchor="w", pady=(4, 8))
@@ -153,11 +169,15 @@ class ControlPanel(tk.Tk):
     def open_project_chat(self):
         root = Path(self.project.get()).expanduser().resolve()
         if not root.is_dir():
-            messagebox.showerror("Project AI chat", "Select an existing project folder.")
+            messagebox.showerror("Project AI Chat", "Select an existing project folder.")
             return
         from .gui_chat_window import ProjectChatWindow
 
-        ProjectChatWindow(self, root, self.coordinator)
+        window = self.chat_window
+        if window is not None and window.winfo_exists() and window.project_root == root:
+            window.show()
+            return
+        self.chat_window = ProjectChatWindow(self, root, self.coordinator)
 
     def show_about(self):
         window = tk.Toplevel(self)
@@ -170,50 +190,17 @@ class ControlPanel(tk.Tk):
         ttk.Label(frame, text=PROJECT_URL).pack(anchor="w", pady=(12, 4))
         ttk.Button(frame, text="Open GitHub repository", command=open_project_repository).pack(anchor="w")
         ttk.Button(frame, text="Close", command=window.destroy).pack(anchor="e", pady=(16, 0))
-
-    def show_activity(self):
-        root = resolve_state_root(Path(self.project.get()).expanduser().resolve()).path
-        window = tk.Toplevel(self)
-        window.title("Multi-Agent-AI — Live Activity")
-        window.geometry("1050x650")
-        frame = ttk.Frame(window, padding=12)
-        frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text=f"Project activity: {root}").pack(anchor="w")
-        ttk.Label(frame, text="Updates every second. A request is recorded, not necessarily delivered; only an acknowledgment proves receipt.").pack(anchor="w", pady=(3, 8))
-        columns = ("time", "event", "summary", "source")
-        table = ttk.Treeview(frame, columns=columns, show="headings", height=13)
-        for key, width in (("time", 155), ("event", 185), ("summary", 310), ("source", 340)):
-            table.heading(key, text=key.title())
-            table.column(key, width=width, stretch=True)
-        table.pack(fill="both", expand=True)
-        detail = tk.Text(frame, height=12, wrap="word", state="disabled")
-        detail.pack(fill="both", expand=True, pady=(8, 0))
-        watcher = ActivityWatcher(root)
-        details: dict[str, str] = {}
-
-        def select(_event=None):
-            selection = table.selection()
-            if selection:
-                detail.configure(state="normal")
-                detail.delete("1.0", "end")
-                detail.insert("1.0", details.get(selection[0], ""))
-                detail.configure(state="disabled")
-
-        table.bind("<<TreeviewSelect>>", select)
-
-        def refresh():
-            if not window.winfo_exists():
-                return
-            for item in watcher.poll():
-                row = table.insert("", "end", values=(item.at, item.event, item.summary, item.source))
-                details[row] = item.detail
-            while len(table.get_children()) > 500:
-                oldest = table.get_children()[0]
-                details.pop(oldest, None)
-                table.delete(oldest)
-            window.after(1000, refresh)
-
-        refresh()
+        # Center over the main window (clamped to the screen).
+        window.withdraw()
+        window.update_idletasks()
+        w, h = window.winfo_reqwidth(), window.winfo_reqheight()
+        x = self.winfo_rootx() + (self.winfo_width() - w) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - h) // 2
+        x = max(0, min(x, self.winfo_screenwidth() - w))
+        y = max(0, min(y, self.winfo_screenheight() - h))
+        window.geometry(f"+{x}+{y}")
+        window.deiconify()
+        window.grab_set()
 
     def start(self, label, task, *, completion=None):
         if self.busy:

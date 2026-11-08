@@ -64,7 +64,9 @@ def test_hello_world_uses_read_only_provider_call(tmp_path, provider):
         elif provider == "claude":
             kwargs["stdout_path"].write_text(json.dumps({"type": "result", "result": "Hello World!"}), encoding="utf-8")
         else:
-            kwargs["stdout_path"].write_text("Hello World!\n", encoding="utf-8")
+            kwargs["stdout_path"].write_text(
+                json.dumps({"type": "assistant.message", "data": {"content": "Hello World!"}}) + "\n",
+                encoding="utf-8")
         return SimpleNamespace(exit_code=0, timed_out=False, cancelled=False, launch_error=None)
 
     answer = ask_provider(provider, tmp_path, "codex", [], HELLO_WORLD_REQUEST,
@@ -82,6 +84,7 @@ def test_hello_world_uses_read_only_provider_call(tmp_path, provider):
     else:
         assert "--available-tools=view,grep,glob" in args
         assert all("allow-all" not in arg for arg in args)
+        assert args[args.index("--output-format") + 1] == "json"
 
 
 def test_prompt_keeps_recent_context_and_bounds_size(tmp_path):
