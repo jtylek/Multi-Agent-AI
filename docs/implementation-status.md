@@ -5,6 +5,13 @@
 
 **Project status: Under active development (resumed 2026-11-02).** The persistent-memory subsystem is in development; it is not yet a validated Windows release. The existing job driver still requires a real-provider end-to-end trial.
 
+On the M1 smoke branch, the disposable demo now assigns Codex, Copilot and Claude to three
+subtasks, and the GUI offers a read-only Live Activity view. Provider usage is shown only when
+reported, and shared verification sections omit other subtasks' commands from worker prompts.
+POSIX extensionless executable discovery is covered with local fake CLI tests. See
+[m1-smoke-test.md](m1-smoke-test.md). Windows GUI packaging and authenticated provider runs
+remain unverified.
+
 
 - **GUI connection workflow (developer preview):** Select a discovered provider and click **Connect Selected Agent**. The GUI launches the provider's own interactive login CLI in a terminal; browser/device-code handling remains provider-owned. No credentials are collected or stored by the GUI. This does not yet constitute authenticated registry enrollment or verified login status.
 
@@ -150,8 +157,8 @@ listed below is planned, not implemented.
 
 Message cleanup and bounded watches (formats.md section 7); OS-level isolation of
 workers (filesystem/network); adaptive routing and the performance ledger; VS Code
-integration; the demo job generator (T31, still on its branch awaiting fixes); the faster test
-suite (T30, awaiting review). Worktree creation (T23), verification (T26) and the job driver (T27)
+integration. The demo job generator and faster test setup have been merged to main; the
+M1 smoke branch extends the demo to three providers. Worktree creation (T23), verification (T26) and the job driver (T27)
 are implemented, see above; no real provider run has been made through them.
 
 Unverified until the first real run (Copilot, T28): the Windows name of the shell tool for

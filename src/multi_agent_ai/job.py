@@ -246,8 +246,9 @@ def choose_reviewer(author: str, cell: str, providers: Sequence[str], available:
 
 
 def build_plan(state: StateRoot, task_id: str, options: JobOptions,
-               available: Callable[[str], bool] = provider_available) -> JobPlan:
+               available: Callable[[str], bool] | None = None) -> JobPlan:
     """Read-only: what ``job start`` would do. Problems block ``--execute``; warnings do not."""
+    available = available or provider_available
     options.validate()
     parsed = read_plan(state.tasks / task_id)
     if parsed.value is None:

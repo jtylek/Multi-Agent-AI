@@ -142,6 +142,14 @@ def resolve_command(name: str, path: str | None = None, env: Mapping[str, str] |
         path = next((v for k, v in env.items() if k.upper() == "PATH"), "")
     dirs = _path_dirs(path)
     given = Path(name)
+    if not IS_WINDOWS:
+        # Provider CLIs on Linux are normally extensionless executable scripts. Run them
+        # directly with argv, never through a shell; ignore non-executable PATH entries.
+        candidates = [given] if given.is_absolute() or given.parent != Path(".") else [d / name for d in dirs]
+        for candidate in candidates:
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return ResolvedCommand(name, candidate, "exe", (str(candidate),))
+        raise LaunchError(f"{name}: executable not found on PATH")
     if given.is_absolute() or given.parent != Path("."):
         if given.suffix.lower() not in EXTENSION_PREFERENCE:
             raise LaunchError(f"{name}: only {', '.join(EXTENSION_PREFERENCE)} files can be run (never .ps1)")

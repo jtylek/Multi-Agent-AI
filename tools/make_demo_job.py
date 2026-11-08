@@ -23,7 +23,7 @@ SUBTASKS = (
     ("multiply", "Multiplication implementation", "src/multiply.py", (), "codex-demo-multiply", "test_multiply.py"),
     ("divide", "Division implementation", "src/divide.py", (), "copilot-demo-divide", "test_divide.py"),
     ("write-tests", "Write integration tests", "tests/test_math.py", ("multiply", "divide"),
-     "codex-demo-test-writer", "test_write_tests.py"),
+     "claude-demo-test-writer", "test_write_tests.py"),
 )
 
 
@@ -261,18 +261,25 @@ def check_demo_root(root: Path) -> list[str]:
 
 
 def _worker_command(root: Path, subtask_id: str) -> str:
+    provider = next(owner.split("-", 1)[0] for sid, _, _, _, owner, _ in SUBTASKS if sid == subtask_id)
     return (
-        "multi-agent-ai worker run --provider codex"
-        f" --task demo --subtask {subtask_id} --agent-id codex-demo-reviewer"
+        f"multi-agent-ai worker run --provider {provider}"
+        f" --task demo --subtask {subtask_id} --agent-id {provider}-demo-reviewer"
         f' --mode review --worktree "<worktree>" --project-root "{root}"'
     )
 
 
-def _print_commands(root: Path, plan_path: Path) -> None:
+def _print_commands(root: Path, plan_path: Path, *, no_venv: bool) -> None:
     print(f"Demo root: {root}")
     print(f"Plan: {plan_path}")
     print("Job dry run (does not contact providers):")
-    print(f'  multi-agent-ai job start --task demo --project-root "{root}"')
+    print(f'  multi-agent-ai job start --task demo --providers codex,copilot,claude --project-root "{root}"')
+    print("Real job (uses provider quota; run only after reviewing the dry run and signing in):")
+    print(
+        f'  multi-agent-ai job start --task demo --providers codex,copilot,claude '
+        f"--verify-command '{_verification_python(root, no_venv)} -m pytest -q verify tests' "
+        f'--project-root "{root}" --execute --approved-provider-run'
+    )
     print("Verification and worker review dry-run commands (replace <worktree> with a task worktree):")
     for subtask_id, _, _, _, _, _ in SUBTASKS:
         print(
@@ -307,7 +314,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"make_demo_job: {exc}", file=sys.stderr)
         return 1
 
-    _print_commands(root, plan_path)
+    _print_commands(root, plan_path, no_venv=args.no_venv)
     if args.no_venv:
         print("Note: --no-venv uses this interpreter; pytest must already be installed.")
     return 0

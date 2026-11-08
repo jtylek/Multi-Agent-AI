@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import queue
+import re
 import shutil
 import subprocess
 import threading
 import time
 from dataclasses import dataclass, asdict
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Callable, Sequence
 
 
@@ -61,6 +62,8 @@ def resolve_executable(command: str) -> str:
 def _same_cwd(value: object, project_root: Path) -> bool:
     if not isinstance(value, str):
         return False
+    if re.match(r"^[A-Za-z]:[/\\]", value) and re.match(r"^[A-Za-z]:[/\\]", str(project_root)):
+        return str(PureWindowsPath(value)).casefold() == str(PureWindowsPath(str(project_root))).casefold()
     try:
         left = Path(value).resolve()
         right = project_root.resolve()

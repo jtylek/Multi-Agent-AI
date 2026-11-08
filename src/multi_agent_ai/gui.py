@@ -10,6 +10,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from . import doctor, provider_auth
+from .activity import ActivityWatcher
 from .agent_catalog import CATALOG
 from .state import resolve_state_root
 
@@ -44,6 +45,7 @@ class ControlPanel(tk.Tk):
         self.refresh_button.pack(side="left", padx=(8, 0))
         self.catalog_button = ttk.Button(actions, text="Free / Open Agents", command=self.show_catalog)
         self.catalog_button.pack(side="left", padx=(8, 0))
+        ttk.Button(actions, text="Live Activity", command=self.show_activity).pack(side="left", padx=(8, 0))
         ttk.Label(outer, text="Select a discovered provider row, then Connect. Sign-in is handled by the provider in a separate terminal/browser.").pack(anchor="w")
         self.status = tk.StringVar(value="Ready. Select your project folder.")
         ttk.Label(outer, textvariable=self.status).pack(anchor="w", pady=(4, 8))
@@ -65,6 +67,50 @@ class ControlPanel(tk.Tk):
         path = filedialog.askdirectory(initialdir=self.project.get())
         if path:
             self.project.set(path)
+
+    def show_activity(self):
+        root = resolve_state_root(Path(self.project.get()).expanduser().resolve()).path
+        window = tk.Toplevel(self)
+        window.title("Multi-Agent-AI — Live Activity")
+        window.geometry("1050x650")
+        frame = ttk.Frame(window, padding=12)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text=f"Project activity: {root}").pack(anchor="w")
+        ttk.Label(frame, text="Updates every second. A request is recorded, not necessarily delivered; only an acknowledgment proves receipt.").pack(anchor="w", pady=(3, 8))
+        columns = ("time", "event", "summary", "source")
+        table = ttk.Treeview(frame, columns=columns, show="headings", height=13)
+        for key, width in (("time", 155), ("event", 185), ("summary", 310), ("source", 340)):
+            table.heading(key, text=key.title())
+            table.column(key, width=width, stretch=True)
+        table.pack(fill="both", expand=True)
+        detail = tk.Text(frame, height=12, wrap="word", state="disabled")
+        detail.pack(fill="both", expand=True, pady=(8, 0))
+        watcher = ActivityWatcher(root)
+        details: dict[str, str] = {}
+
+        def select(_event=None):
+            selection = table.selection()
+            if selection:
+                detail.configure(state="normal")
+                detail.delete("1.0", "end")
+                detail.insert("1.0", details.get(selection[0], ""))
+                detail.configure(state="disabled")
+
+        table.bind("<<TreeviewSelect>>", select)
+
+        def refresh():
+            if not window.winfo_exists():
+                return
+            for item in watcher.poll():
+                row = table.insert("", "end", values=(item.at, item.event, item.summary, item.source))
+                details[row] = item.detail
+            while len(table.get_children()) > 500:
+                oldest = table.get_children()[0]
+                details.pop(oldest, None)
+                table.delete(oldest)
+            window.after(1000, refresh)
+
+        refresh()
 
     def start(self, label, task):
         if self.busy:

@@ -47,8 +47,11 @@ def test_create_demo_job_has_valid_plan_and_real_master_commit(tmp_path):
     assert {subtask.id for subtask in parsed.value.subtasks} == {"multiply", "divide", "write-tests"}
     owners = [subtask.owner_id for subtask in parsed.value.subtasks]
     assert len(set(owners)) == 3
-    dry_run = build_plan(resolve_state_root(root), "demo", JobOptions(), available=lambda provider: True)
+    dry_run = build_plan(resolve_state_root(root), "demo", JobOptions(providers=("codex", "copilot", "claude")),
+                         available=lambda provider: True)
     assert dry_run.problems == []
+    assert {task.author_provider for task in dry_run.subtasks} == {"codex", "copilot", "claude"}
+    assert all(task.reviewer_provider != task.author_provider for task in dry_run.subtasks)
     test_task = next(subtask for subtask in parsed.value.subtasks if subtask.id == "write-tests")
     assert set(test_task.depends_on) == {"multiply", "divide"}
     for subtask_id, verify_file in (
@@ -75,7 +78,7 @@ def test_generated_verification_fails_until_each_solution_is_correct(tmp_path, c
     assert code != 0
     assert result["status"] == "verification_failed"
     (root / "src" / "multiply.py").write_text(
-        "def multiply(left, right):\n    return left * right\n", encoding="utf-8",
+        "def multiply(left, right):\n    return left * right  # corrected\n", encoding="utf-8",
     )
     code, result = verify_subtask(root, "multiply", capsys)
     assert code == 0
@@ -140,7 +143,9 @@ def test_cli_prints_verification_and_dry_run_commands(tmp_path, capsys):
         assert f"--project-root \"{root.resolve()}\"" in output
     assert output.count("multi-agent-ai verify") == 3
     assert output.count("multi-agent-ai worker run") == 3
-    assert f'multi-agent-ai job start --task demo --project-root "{root.resolve()}"' in output
+    assert f'multi-agent-ai job start --task demo --providers codex,copilot,claude --project-root "{root.resolve()}"' in output
+    assert "--execute --approved-provider-run" in output
+    assert f'"{sys.executable}" -m pytest -q verify tests' in output
     for line in output.splitlines():
         if "multi-agent-ai worker run" in line:
             assert '--mode review --worktree "<worktree>"' in line
