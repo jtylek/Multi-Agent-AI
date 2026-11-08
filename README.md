@@ -10,6 +10,13 @@ The primary development environments are **Windows 10/11 and Linux with Visual S
 
 ## Windows installer (ScreenCapture-style)
 
+For a repeatable three-provider trial, see [M1 provider smoke test](docs/m1-smoke-test.md).
+The control panel's **Live Activity** window polls the selected project's mailbox, task
+board, job log and provider result records about once per second. It labels recorded requests
+separately from recipient acknowledgments and displays measured token usage where available;
+missing usage is `unknown`. Worker prompts omit verification commands belonging to other
+subtasks to reduce avoidable context.
+
 **Packaging under development:** the feature branch contains a PyInstaller + Inno Setup build that produces `Multi-Agent-AI-Setup.exe`. This is not yet a published or verified release. Once a tagged release has passed Windows CI, download it from [Releases](https://github.com/jtylek/Multi-Agent-AI/releases). The installer installs per user and includes a frozen Python runtime; no Python installation is needed to run it.
 
 Build locally (Windows, Python 3.12 and Inno Setup 6):
@@ -200,7 +207,7 @@ On Windows, the implementation must correctly resolve `.exe`, `.cmd`, and `.bat`
 
 ## Quick start
 
-There is no installer or UI yet; everything is a command-line tool. This walkthrough uses a
+This walkthrough uses the command-line tool in a source checkout. It uses a
 throwaway Git repository and starts no AI agent and uses no provider quota.
 
 **You need:** Windows 10/11, Python 3.11 or newer (`py -3.12 --version`), and Git. The `codex`

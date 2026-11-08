@@ -21,7 +21,7 @@ from multi_agent_ai.workers.copilot import (
     final_message_from_events,
     verification_pattern,
 )
-from multi_agent_ai.workers.prompt import VerificationNotDeclared, build_prompt, verification_command
+from multi_agent_ai.workers.prompt import VerificationNotDeclared, build_prompt, verification_command, verification_text
 from multi_agent_ai.workers.runner import ADAPTERS
 
 WT = Path(r"C:\work\wt T1")
@@ -221,8 +221,10 @@ def test_verification_command_uses_matching_per_subtask_entry():
     plan = make_plan()
     plan = replace(plan, body=plan.body + "\n## Verification\n"
                    "verify: T1: `python -m pytest tests/test_one.py -q`\n"
-                   "verify: T2: `python -m pytest tests/test_two.py -q`\n")
+                   "verify: T9: `python -m pytest tests/test_two.py -q`\n")
     assert verification_command(plan, "T1") == "python -m pytest tests/test_one.py -q"
+    assert "tests/test_two.py" not in verification_text(plan, "T1")
+    assert "tests/test_one.py" in verification_text(plan, "T1")
 
 
 def test_verification_command_requires_entries_for_multiple_subtasks():

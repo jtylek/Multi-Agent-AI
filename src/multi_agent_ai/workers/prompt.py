@@ -95,7 +95,18 @@ def acceptance_text(plan: Plan, subtask_id: str) -> str:
 def verification_text(plan: Plan, subtask_id: str) -> str:
     parts = _select(plan.body, "verification", subtask_id)
     if parts:
-        return "\n\n".join(parts)
+        text = "\n\n".join(parts)
+        if len(plan.subtasks) > 1:
+            # Shared verification sections may list every subtask. Do not spend context on
+            # commands for other workers, while retaining general verification guidance.
+            other = {subtask.id.casefold() for subtask in plan.subtasks if subtask.id != subtask_id}
+            lines = []
+            for line in text.splitlines():
+                match = re.match(r"^[ \t]*(?:(?:[-*]|\d+[.])[ \t]+)?verify:[ \t]*([^:\s]+)[ \t]*:", line, re.I)
+                if not match or match.group(1).casefold() not in other:
+                    lines.append(line)
+            text = "\n".join(lines)
+        return text
     # otherwise the numbered/bulleted acceptance items that mention verification
     items = re.split(r"\n(?=[ \t]*(?:\d+\.|[-*])[ \t])", acceptance_text(plan, subtask_id))
     found = [item.strip("\n") for item in items if "verification" in item.lower()]
